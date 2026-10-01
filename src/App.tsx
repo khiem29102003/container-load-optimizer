@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ChangeEvent, useEffect, useRef, useState } from 'react'
-import { demoCargo, demoContainer } from './data/demo'
+import { defaultContainer } from './data/defaults'
 import { createTemplateCsv, estimateAdditionalQuantity, explainPlacementIssue, normalizeCargo } from './optimizer/engine'
 import { supabase } from './lib/supabase'
 import type { CargoSpec, ContainerSpec, LoadingProject, OptimizationResult, Placement } from './types'
@@ -21,30 +21,15 @@ const defaultSettings = {
   loadingSequenceWeight: 5,
 }
 
-function generateAiAnswer(question: string, plan: OptimizationResult | null): string {
+function explainPlan(plan: OptimizationResult | null): string {
   if (!plan) {
-    return 'Hệ thống đang chờ chu kỳ tối ưu tiếp theo. Tải container và dữ liệu hàng hóa để nhận giải thích thời gian thực.'
+    return 'Thêm hàng hóa hoặc nhập bảng dữ liệu để hệ thống tính phương án xếp thực tế.'
   }
 
-  const lower = question.toLowerCase()
-
-  if (lower.includes('why') && (lower.includes('utilization') || lower.includes('space') || lower.includes('dung tích') || lower.includes('thể tích'))) {
-    return `Kế hoạch hiện tại đang sử dụng ${plan.volumeUtilization.toFixed(1)}% thể tích container. Phần lớn hao hụt đến từ khoảng trống còn lại và cách phối trộn hàng hóa. Bộ tối ưu ưu tiên vị trí hợp lệ trước, nên các khoảng rỗng vẫn tồn tại khi kích thước kiện còn lại không khớp với không gian còn trống mà không vi phạm hỗ trợ, va chạm hoặc xếp chồng.`
-  }
-
-  if (lower.includes('waste') || lower.includes('space') || lower.includes('lãng phí') || lower.includes('rỗng')) {
-    return `Thể tích chưa sử dụng hiện là ${plan.unusedVolume.toFixed(0)} mm³. Lỗ hổng lớn nhất xảy ra khi kích thước hàng còn lại không khớp với các khối rỗng còn lại sau lớp xếp trước.`
-  }
-
-  if (lower.includes('rotate') || lower.includes('rotation') || lower.includes('xoay')) {
-    return `Tùy chọn xoay đã được kích hoạt trong lần chạy này, nhưng phương án vẫn hợp lệ vì bộ tối ưu kiểm tra mọi hướng đặt hợp pháp và chỉ chấp nhận vị trí thỏa mãn ranh giới, hỗ trợ, va chạm và xếp chồng.`
-  }
-
-  if (lower.includes('container') && (lower.includes('reduce') || lower.includes('giảm') || lower.includes('3') || lower.includes('2'))) {
-    return `Kế hoạch hiện tại đang sử dụng ${plan.totalContainers} container. Cách cải thiện tốt nhất là giảm các nhóm hàng nhỏ hoặc rời rạc nhất và chạy lại tối ưu với ưu tiên thể tích cao hơn.`
-  }
-
-  return `Dựa trên kế hoạch hiện tại, bộ tối ưu báo cáo ${plan.totalContainers} container, ${plan.loaded.length} kiện hàng đã xếp, và mức sử dụng thể tích ${plan.volumeUtilization.toFixed(1)}%. Ràng buộc lớn nhất hiện là hình học không gian trống còn lại và cấu trúc hàng hóa, không chỉ riêng giới hạn trọng lượng.`
+  const unloadedText = plan.unloaded.length > 0
+    ? ` ${plan.unloaded.length} kiện chưa xếp do giới hạn tải trọng hoặc vị trí.`
+    : ' Toàn bộ số lượng đã nhập đều được xếp.'
+  return `Kế hoạch có ${plan.totalContainers} container, xếp ${plan.loaded.length} kiện, sử dụng ${plan.volumeUtilization.toFixed(2)}% thể tích và ${plan.payloadUtilization.toFixed(1)}% tải trọng.${unloadedText}`
 }
 
 async function persistProjectSnapshot(
@@ -77,12 +62,10 @@ function App({ userId }: { userId: string }) {
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [projectStatus, setProjectStatus] = useState('')
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading')
-  const [container, setContainer] = useState<ContainerSpec>(demoContainer)
-  const [cargo, setCargo] = useState<CargoSpec[]>(demoCargo)
+  const [container, setContainer] = useState<ContainerSpec>(defaultContainer)
+  const [cargo, setCargo] = useState<CargoSpec[]>([])
   const [plan, setPlan] = useState<OptimizationResult | null>(null)
-  const [logs, setLogs] = useState<string[]>(['[hệ thống] Sẵn sàng cho chạy demo.'])
-  const [question, setQuestion] = useState('Vì sao mức sử dụng thể tích container hiện đang bị giới hạn?')
-  const [aiAnswer, setAiAnswer] = useState('Bộ tối ưu đang phân tích thực tế cấu trúc hàng hóa để giải thích khoảng trống và giới hạn dung tích.')
+  const [logs, setLogs] = useState<string[]>(['[hệ thống] Đang tải dự án của bạn.'])
   const [selectedPlacement, setSelectedPlacement] = useState<Placement | null>(null)
   const [view, setView] = useState<'front' | 'top'>('front')
 
@@ -113,7 +96,7 @@ function App({ userId }: { userId: string }) {
         if (ownedProjects.length === 0) {
           const { data: created, error: createError } = await client
             .from('loading_projects')
-            .insert({ owner_id: userId, name: 'Dự án đầu tiên', container: demoContainer, cargo: demoCargo, plan: null })
+            .insert({ owner_id: userId, name: 'Dự án đầu tiên', container: defaultContainer, cargo: [], plan: null })
             .select('*')
             .single()
 
@@ -242,6 +225,11 @@ function App({ userId }: { userId: string }) {
   }, [])
 
   const handleOptimize = () => {
+    if (cargo.length === 0) {
+      setProjectStatus('Thêm ít nhất một dòng hàng hóa trước khi tối ưu.')
+      return
+    }
+    setProjectStatus('')
     const worker = workerRef.current
     if (!worker) {
       return
@@ -288,7 +276,7 @@ function App({ userId }: { userId: string }) {
     }
     const { data, error } = await supabase
       .from('loading_projects')
-      .insert({ owner_id: userId, name: `Dự án ${projects.length + 1}`, container: demoContainer, cargo: [], plan: null })
+      .insert({ owner_id: userId, name: `Dự án ${projects.length + 1}`, container: defaultContainer, cargo: [], plan: null })
       .select('*')
       .single()
 
@@ -329,17 +317,22 @@ function App({ userId }: { userId: string }) {
     setLoadAttempt((current) => current + 1)
   }
 
-  const handleLoadDemo = () => {
-    setContainer({ ...demoContainer })
-    setCargo(demoCargo.map((item) => ({ ...item })))
-    setPlan(null)
-  }
-
   const handleReset = () => {
     requestIdRef.current += 1
     setPlan(null)
-    setLogs(['[hệ thống] Sẵn sàng cho chạy demo.'])
+    setLogs(['[hệ thống] Đã xóa kế hoạch tối ưu.'])
     setSelectedPlacement(null)
+  }
+
+  const handleClearCargo = () => {
+    if (cargo.length === 0 || !window.confirm('Xóa toàn bộ dòng hàng hóa khỏi dự án này?')) return
+    requestIdRef.current += 1
+    setSaveStatus('saving')
+    setProjectStatus('')
+    setCargo([])
+    setPlan(null)
+    setSelectedPlacement(null)
+    setLogs(['[hệ thống] Đã xóa hàng hóa khỏi dự án.'])
   }
 
   const addRecommendedQuantity = (itemId: string, amount: number) => {
@@ -511,10 +504,6 @@ function App({ userId }: { userId: string }) {
     }
   }
 
-  const handleAskAi = () => {
-    setAiAnswer(generateAiAnswer(question, plan))
-  }
-
   const downloadBlob = (content: string, fileName: string, type: string) => {
     const blob = new Blob([content], { type })
     const url = URL.createObjectURL(blob)
@@ -540,7 +529,7 @@ function App({ userId }: { userId: string }) {
     const { jsPDF } = await import('jspdf')
     const pdf = new jsPDF()
     pdf.setFontSize(18)
-    pdf.text('Container Load Optimizer AI', 14, 18)
+    pdf.text('Container Load Optimizer', 14, 18)
     pdf.setFontSize(11)
     pdf.text(`Container: ${container.name}`, 14, 30)
     pdf.text(`Tỷ lệ thể tích: ${plan ? plan.volumeUtilization.toFixed(1) : '0.0'}%`, 14, 38)
@@ -581,16 +570,23 @@ function App({ userId }: { userId: string }) {
         <div className="brand-block">
           <div className="brand-mark">CL</div>
           <div>
-            <p className="eyebrow">AI LOGISTICS</p>
+            <p className="eyebrow">LOGISTICS OPERATIONS</p>
             <h2>Container Load Optimizer</h2>
           </div>
         </div>
 
         <nav className="nav">
-          {['Bảng điều khiển', 'Container', 'Hàng hóa', 'Tối ưu', '3D Loading', 'Báo cáo', 'Nhập / Xuất', 'Cài đặt'].map((item) => (
-            <button key={item} type="button" className="nav-item">
-              {item}
-            </button>
+          {[
+            ['Tổng quan', '#dashboard'],
+            ['Container', '#container'],
+            ['Hàng hóa', '#cargo'],
+            ['3D Loading', '#visualization'],
+            ['Kết quả', '#results'],
+            ['Xuất báo cáo', '#reports'],
+          ].map(([label, target]) => (
+            <a key={target} href={target} className="nav-item">
+              {label}
+            </a>
           ))}
         </nav>
       </aside>
@@ -599,7 +595,7 @@ function App({ userId }: { userId: string }) {
         <header className="topbar">
           <div>
             <p className="eyebrow">TỐI ƯU 3D THÔNG MINH</p>
-            <h1>Container Load Optimizer AI</h1>
+            <h1>Container Load Optimizer</h1>
           </div>
           <div className="actions">
             <label className="project-picker">Dự án
@@ -612,16 +608,15 @@ function App({ userId }: { userId: string }) {
               {saveStatus === 'loading' ? 'Đang tải...' : saveStatus === 'saving' ? 'Đang lưu...' : saveStatus === 'error' ? 'Lỗi lưu' : 'Đã lưu'}
             </span>
             <button type="button" className="ghost" onClick={() => void handleSignOut()}>Đăng xuất</button>
-            <button type="button" className="primary" onClick={handleLoadDemo}>🚀 CHẠY DEMO TỐI ƯU</button>
             <button type="button" className="secondary" onClick={() => fileInputRef.current?.click()}>Nhập Excel/CSV</button>
-            <button type="button" className="secondary" onClick={handleOptimize}>Tối ưu</button>
-            <button type="button" className="ghost" onClick={handleReset}>Đặt lại</button>
+            <button type="button" className="primary" onClick={handleOptimize} disabled={cargo.length === 0}>Tối ưu</button>
+            <button type="button" className="ghost" onClick={handleReset} disabled={!plan}>Xóa kế hoạch</button>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={handleImport} />
           </div>
         </header>
         {projectStatus && <p className="project-message" role="alert">{projectStatus}</p>}
 
-        <section className="stats-row">
+        <section className="stats-row" id="dashboard">
           {resultCards.map((card) => (
             <div key={card.label} className="stat-card">
               <span>{card.label}</span>
@@ -631,7 +626,7 @@ function App({ userId }: { userId: string }) {
         </section>
 
         <section className="workspace-grid">
-          <div className="panel panel-lg">
+          <div className="panel panel-lg" id="container">
             <div className="panel-header">
               <h3>Thông tin Container</h3>
             </div>
@@ -681,12 +676,13 @@ function App({ userId }: { userId: string }) {
             </div>
           </div>
 
-          <div className="panel panel-lg">
+          <div className="panel panel-lg" id="cargo">
             <div className="panel-header split-header">
               <h3>Dữ liệu hàng hóa</h3>
               <div className="inline-actions">
                 <button type="button" className="secondary" onClick={downloadTemplate}>Tải mẫu Excel</button>
                 <button type="button" className="secondary" onClick={addCargoRow}>Thêm dòng</button>
+                <button type="button" className="ghost" onClick={handleClearCargo} disabled={cargo.length === 0}>Xóa tất cả</button>
               </div>
             </div>
             <div className="table-wrap">
@@ -706,7 +702,9 @@ function App({ userId }: { userId: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {cargo.map((item, index) => (
+                  {cargo.length === 0 ? (
+                    <tr><td colSpan={10} className="empty-table-cell">Chưa có hàng hóa. Thêm một dòng hoặc nhập file để bắt đầu.</td></tr>
+                  ) : cargo.map((item, index) => (
                     <tr key={`${item.id}-${index}`}>
                       <td><input value={item.sku} onChange={(event) => updateCargoRow(index, 'sku', event.target.value)} /></td>
                       <td><input value={item.name} onChange={(event) => updateCargoRow(index, 'name', event.target.value)} /></td>
@@ -727,7 +725,7 @@ function App({ userId }: { userId: string }) {
         </section>
 
         <section className="analysis-grid">
-          <div className="panel viewer-panel">
+          <div className="panel viewer-panel" id="visualization">
             <div className="panel-header split-header">
               <h3>Trực quan 3D</h3>
               <div className="inline-actions">
@@ -741,18 +739,16 @@ function App({ userId }: { userId: string }) {
                   <Container3D container={container} placements={plan.loaded.filter((item) => item.containerIndex === 1)} view={view} />
                 </Suspense>
               ) : (
-                <div className="empty-state">Tải dữ liệu demo hoặc chạy tối ưu để hiển thị kế hoạch 3D.</div>
+                <div className="empty-state">Thêm hàng hóa rồi chọn “Tối ưu” để xem cách xếp trong container.</div>
               )}
             </div>
           </div>
 
           <div className="panel right-stack">
             <div className="panel-header">
-              <h3>Trợ lý tối ưu AI</h3>
+              <h3>Phân tích kế hoạch</h3>
             </div>
-            <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={4} />
-            <button type="button" className="primary" onClick={handleAskAi}>Hỏi AI</button>
-            <div className="ai-answer">{aiAnswer}</div>
+            <div className="ai-answer">{explainPlan(plan)}</div>
 
             <div className="panel-header top-spacing">
               <h3>Nhật ký tối ưu</h3>
@@ -765,7 +761,7 @@ function App({ userId }: { userId: string }) {
           </div>
         </section>
 
-        <section className="result-grid">
+        <section className="result-grid" id="results">
           <div className="panel">
             <div className="panel-header">
               <h3>Kết quả tối ưu</h3>
@@ -833,7 +829,7 @@ function App({ userId }: { userId: string }) {
           </div>
         </section>
 
-        <section className="panel bottom-panel">
+        <section className="panel bottom-panel" id="reports">
           <div className="panel-header split-header">
             <h3>Hàng đã xếp</h3>
             <div className="inline-actions">

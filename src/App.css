@@ -51,12 +51,14 @@
 }
 
 .nav-item {
+  display: block;
   border: 1px solid rgba(148, 163, 184, 0.12);
   background: rgba(15, 23, 42, 0.7);
   color: #dfeaf8;
   border-radius: 12px;
   padding: 10px 12px;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
 }
 

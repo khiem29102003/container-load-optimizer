@@ -1,9 +1,6 @@
 # Container Load Optimizer
 
-Container loading planner built with React, TypeScript, Vite, Three.js, and Supabase. Each account owns private loading projects. Container and cargo inputs are saved automatically, and optimization plans are stored with the project.
-## Local development
-
-Requirements: Node.js 22 LTS and npm.
+Container loading planner built with React, TypeScript, Vite, Three.js, and Supabase. Accounts are provisioned by an administrator; each account's projects are private and saved automatically.
 
 ```cmd
 npm ci
@@ -34,7 +31,7 @@ VITE_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR-PUBLISHABLE-OR-ANON-KEY
 ```
 
-Self-service registration is disabled. An administrator creates accounts in **Authentication → Users → Add user**; for controlled testing, the administrator may confirm the user from the dashboard. The first successful login creates a starter project with demo cargo. Subsequent projects are private to that account. Configure custom SMTP before relying on confirmation or password-reset emails for production.
+Self-service registration is disabled. An administrator creates accounts in **Authentication → Users → Add user**; for controlled testing, the administrator may confirm the user from the dashboard. The first successful login creates an empty project with the default container and no cargo rows. Subsequent projects are private to that account. Configure custom SMTP before relying on confirmation or password-reset emails for production.
 
 The publishable/anon key is intended for browser use; row-level security is the data boundary. Never put a Supabase service-role key in a `VITE_` variable or in frontend code.
 
