@@ -6,6 +6,14 @@ import type { CargoSpec, ContainerSpec, LoadingProject, OptimizationResult, Plac
 import './App.css'
 
 const Container3D = lazy(() => import('./components/Container3D').then((module) => ({ default: module.Container3D })))
+const navigationItems = [
+  { label: 'Tổng quan', target: '#dashboard', short: 'TQ' },
+  { label: 'Container', target: '#container', short: 'CT' },
+  { label: 'Hàng hóa', target: '#cargo', short: 'HH' },
+  { label: '3D Loading', target: '#visualization', short: '3D' },
+  { label: 'Kết quả', target: '#results', short: 'KQ' },
+  { label: 'Xuất báo cáo', target: '#reports', short: 'BC' },
+] as const
 
 const defaultSettings = {
   minSupportRatio: 0.6,
@@ -68,9 +76,33 @@ function App({ userId }: { userId: string }) {
   const [logs, setLogs] = useState<string[]>(['[hệ thống] Đang tải dự án của bạn.'])
   const [selectedPlacement, setSelectedPlacement] = useState<Placement | null>(null)
   const [view, setView] = useState<'front' | 'top'>('front')
+  const [loadedPage, setLoadedPage] = useState(1)
+  const [loadedPageSize, setLoadedPageSize] = useState(25)
+  const [activeSection, setActiveSection] = useState('#dashboard')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   const totalCargoWeight = cargo.reduce((sum, item) => sum + item.weight * item.quantity, 0)
   const requestedItemCount = cargo.reduce((sum, item) => sum + Math.max(0, Math.round(item.quantity)), 0)
+  const loadedItems = plan?.loaded ?? []
+  const loadedPageCount = Math.max(1, Math.ceil(loadedItems.length / loadedPageSize))
+  const currentLoadedPage = Math.min(loadedPage, loadedPageCount)
+  const firstLoadedIndex = (currentLoadedPage - 1) * loadedPageSize
+  const visibleLoadedItems = loadedItems.slice(firstLoadedIndex, firstLoadedIndex + loadedPageSize)
+
+  useEffect(() => {
+    const sections = navigationItems
+      .map(({ target }) => document.querySelector(target))
+      .filter((section): section is Element => section !== null)
+    const observer = new IntersectionObserver((entries) => {
+      const visibleSection = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0]
+      if (visibleSection) setActiveSection(`#${visibleSection.target.id}`)
+    }, { rootMargin: '-96px 0px -65% 0px', threshold: [0, 0.1, 0.25, 0.5] })
+
+    sections.forEach((section) => observer.observe(section))
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     const client = supabase
@@ -162,6 +194,7 @@ function App({ userId }: { userId: string }) {
       }
       const result = event.data.result
       setPlan(result)
+      setLoadedPage(1)
       setLogs(result.logs)
       setSelectedPlacement(result.loaded[0] ?? null)
     }
@@ -256,6 +289,7 @@ function App({ userId }: { userId: string }) {
     setContainer(selected.container)
     setCargo(selected.cargo)
     setPlan(selected.plan)
+    setLoadedPage(1)
     setSelectedPlacement(selected.plan?.loaded[0] ?? null)
     setProjectStatus('')
     setSaveStatus('saved')
@@ -291,6 +325,7 @@ function App({ userId }: { userId: string }) {
     setContainer(created.container)
     setCargo(created.cargo)
     setPlan(created.plan)
+    setLoadedPage(1)
     setSelectedPlacement(null)
     setProjectStatus('')
     setSaveStatus('saved')
@@ -566,26 +601,36 @@ function App({ userId }: { userId: string }) {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <aside className={`sidebar${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
         <div className="brand-block">
           <div className="brand-mark">CL</div>
-          <div>
+          <div className="brand-copy">
             <p className="eyebrow">LOGISTICS OPERATIONS</p>
             <h2>Container Load Optimizer</h2>
           </div>
         </div>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-expanded={!sidebarCollapsed}
+          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+        >
+          {sidebarCollapsed ? 'Mở menu' : 'Thu gọn'}
+        </button>
 
         <nav className="nav">
-          {[
-            ['Tổng quan', '#dashboard'],
-            ['Container', '#container'],
-            ['Hàng hóa', '#cargo'],
-            ['3D Loading', '#visualization'],
-            ['Kết quả', '#results'],
-            ['Xuất báo cáo', '#reports'],
-          ].map(([label, target]) => (
-            <a key={target} href={target} className="nav-item">
-              {label}
+          {navigationItems.map(({ label, target, short }) => (
+            <a
+              key={target}
+              href={target}
+              title={label}
+              aria-label={label}
+              aria-current={activeSection === target ? 'location' : undefined}
+              className={`nav-item${activeSection === target ? ' nav-item-active' : ''}`}
+              onClick={() => setActiveSection(target)}
+            >
+              <span className="nav-short" aria-hidden="true">{short}</span>
+              <span className="nav-label">{label}</span>
             </a>
           ))}
         </nav>
@@ -854,9 +899,9 @@ function App({ userId }: { userId: string }) {
               </tr>
             </thead>
             <tbody>
-              {(plan?.loaded ?? []).map((item, index) => (
+              {visibleLoadedItems.map((item, index) => (
                 <tr key={item.id} onClick={() => setSelectedPlacement(item)}>
-                  <td>{index + 1}</td>
+                  <td>{firstLoadedIndex + index + 1}</td>
                   <td>{item.sku}</td>
                   <td>{item.name}</td>
                   <td>{item.length}</td>
@@ -870,6 +915,26 @@ function App({ userId }: { userId: string }) {
               ))}
             </tbody>
           </table>
+          <div className="pagination-controls">
+            <span className="pagination-count">
+              {loadedItems.length === 0 ? '0 kiện' : `Hiển thị ${firstLoadedIndex + 1}–${Math.min(firstLoadedIndex + loadedPageSize, loadedItems.length)} / ${loadedItems.length} kiện`}
+            </span>
+            <label className="page-size-picker">Mỗi trang
+              <select value={loadedPageSize} onChange={(event) => {
+                setLoadedPageSize(Number(event.target.value))
+                setLoadedPage(1)
+              }}>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+            <div className="page-navigation">
+              <button type="button" className="secondary" onClick={() => setLoadedPage(Math.max(1, currentLoadedPage - 1))} disabled={currentLoadedPage <= 1}>Trước</button>
+              <span>Trang {currentLoadedPage} / {loadedPageCount}</span>
+              <button type="button" className="secondary" onClick={() => setLoadedPage(Math.min(loadedPageCount, currentLoadedPage + 1))} disabled={currentLoadedPage >= loadedPageCount}>Sau</button>
+            </div>
+          </div>
         </section>
 
         <section className="panel bottom-panel">
