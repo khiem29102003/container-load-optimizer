@@ -46,17 +46,10 @@ Connect the GitHub repository and use:
 
 Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in **Project Settings → Environment Variables** for Production, Preview, and Development, then redeploy. Do not add service-role credentials.
 
-## Security
-
-- Optimization runs in the Vercel `/api/optimize` function. The browser sends only the project ID and its Supabase access token; the server verifies the user, reads only that user's RLS-protected project, validates the workload, computes the plan, and saves it.
-- Keep this GitHub repository **Private** if the optimizer source is proprietary. A browser cannot be made safe from F12/devtools; client-delivered code is inspectable. The optimizer implementation is kept out of the client bundle, but a public source repository would still expose it.
-- Vercel security headers are configured in [`vercel.json`](vercel.json). Supabase RLS remains mandatory; never expose service-role keys.
-- Rotate any password that has been shared in chat or reused elsewhere.
-
 ## Data and operating notes
 
 - Cargo, container, and optimization data are persisted in Supabase. Auth session tokens are stored by the Supabase client in the browser.
-- Excel/CSV parsing and PDF/CSV/JSON exports run in the user's browser. Exported files download to that user's device; optimization is performed by the authenticated server function.
+- Excel/CSV parsing, optimization, and PDF/CSV/JSON exports run in the user's browser. Exported files download to that user's device.
 - The app imports `.xlsx` with SheetJS 0.20.3 from the official SheetJS CDN because the npm registry package is stale. Spreadsheet files are capped at 10 MB and the parser loads on demand.
 - Run `npm audit` after dependency updates. The production dependency audit was clean after upgrading SheetJS; review future advisories before deployment.
 - The default 40 ft GP dimensions currently match the requested exterior measurements. Replace them with verified internal dimensions before using plans for real cargo operations.
@@ -67,6 +60,8 @@ This template provides a minimal setup to get React working in Vite with HMR and
 
 Currently, two official plugins are available:
 
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
 ## React Compiler
 
@@ -91,3 +86,4 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+"# container-load-optimizer" 

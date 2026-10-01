@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { estimateAdditionalQuantity } from '../lib/cargoTools'
 import { mapCargoGrid, mapCargoRows } from '../lib/importCargo'
-import { findPlacement, getRotationOptions, runOptimizer, validatePlacement } from './engine'
+import { estimateAdditionalQuantity, findPlacement, getRotationOptions, runOptimizer, validatePlacement } from './engine'
 
 function createCubeCargo(id: string, sku: string, quantity: number) {
   return {

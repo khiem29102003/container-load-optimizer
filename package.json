@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && tsc -p tsconfig.api.json && vite build",
+    "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "tsx --test src/optimizer/engine.test.ts",
     "preview": "vite preview --host 0.0.0.0"

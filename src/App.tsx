@@ -1,6 +1,6 @@
 import { lazy, Suspense, type ChangeEvent, useEffect, useRef, useState } from 'react'
 import { defaultContainer } from './data/defaults'
-import { createTemplateCsv, estimateAdditionalQuantity, normalizeCargo } from './lib/cargoTools'
+import { createTemplateCsv, estimateAdditionalQuantity, explainPlacementIssue, normalizeCargo } from './optimizer/engine'
 import { mapCargoGrid } from './lib/importCargo'
 import { supabase } from './lib/supabase'
 import type { CargoSpec, ContainerSpec, LoadingProject, OptimizationResult, Placement } from './types'
@@ -15,6 +15,20 @@ const navigationItems = [
   { label: 'Kết quả', target: '#results', short: 'KQ' },
   { label: 'Xuất báo cáo', target: '#reports', short: 'BC' },
 ] as const
+
+const defaultSettings = {
+  minSupportRatio: 0.6,
+  maxCgOffset: 0.18,
+  defaultClearance: 10,
+  optimizationIterations: 120,
+  candidateLimit: 200,
+  allowRotation: true,
+  balanceWeight: 20,
+  volumeWeight: 40,
+  containerCountWeight: 15,
+  fragilityWeight: 10,
+  loadingSequenceWeight: 5,
+}
 
 function explainPlan(plan: OptimizationResult | null): string {
   if (!plan) {
@@ -47,34 +61,9 @@ async function persistProjectSnapshot(
   }
 }
 
-async function calculateProjectPlan(
-  projectId: string,
-  userId: string,
-  container: ContainerSpec,
-  cargo: CargoSpec[],
-): Promise<OptimizationResult> {
-  if (!supabase) throw new Error('Chưa kết nối cơ sở dữ liệu.')
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-  if (sessionError || !session?.access_token) throw new Error('Phiên đăng nhập hết hạn. Hãy đăng nhập lại.')
-
-  const saveError = await persistProjectSnapshot(projectId, userId, container, cargo, null)
-  if (saveError) throw new Error(`Không lưu được dữ liệu trước khi tối ưu: ${saveError}`)
-
-  const response = await fetch('/api/optimize', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({ projectId }),
-  })
-  const payload = await response.json() as { plan?: OptimizationResult; error?: string }
-  if (!response.ok || !payload.plan) throw new Error(payload.error ?? 'Không thể tối ưu kế hoạch.')
-  return payload.plan
-}
-
 function App({ userId }: { userId: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const workerRef = useRef<Worker | null>(null)
   const requestIdRef = useRef(0)
   const [projects, setProjects] = useState<LoadingProject[]>([])
   const [activeProjectId, setActiveProjectId] = useState('')
@@ -199,6 +188,27 @@ function App({ userId }: { userId: string }) {
   }, [activeProjectId, cargo, container, plan, projectReady, userId])
 
   useEffect(() => {
+    const worker = new Worker(new URL('./optimizer/optimizer.worker.ts', import.meta.url), { type: 'module' })
+    workerRef.current = worker
+    worker.onmessage = (event: MessageEvent<{ requestId: number; result: OptimizationResult }>) => {
+      if (event.data.requestId !== requestIdRef.current) {
+        return
+      }
+      const result = event.data.result
+      setPlan(result)
+      setLoadedPage(1)
+      setLogs(result.logs)
+      setSelectedPlacement(result.loaded[0] ?? null)
+    }
+    worker.onerror = () => setLogs(['[hệ thống] Không thể chạy bộ tối ưu. Vui lòng thử lại.'])
+
+    return () => {
+      worker.terminate()
+      workerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
     if (!projectReady) return
     const isComplete =
       container.length > 0 && container.width > 0 && container.height > 0 &&
@@ -213,27 +223,17 @@ function App({ userId }: { userId: string }) {
 
     const requestId = ++requestIdRef.current
     const timer = window.setTimeout(() => {
+      const worker = workerRef.current
+      if (!worker) {
+        return
+      }
       setPlan(null)
       setSelectedPlacement(null)
       setLogs(['[hệ thống] Đang tối ưu dữ liệu hiện tại...'])
-      void calculateProjectPlan(activeProjectId, userId, container, cargo)
-        .then((result) => {
-          if (requestId !== requestIdRef.current) return
-          setPlan(result)
-          setLoadedPage(1)
-          setLogs(result.logs)
-          setSelectedPlacement(result.loaded[0] ?? null)
-          setProjectStatus('')
-        })
-        .catch((error: unknown) => {
-          if (requestId !== requestIdRef.current) return
-          setProjectStatus(`Tối ưu thất bại: ${error instanceof Error ? error.message : 'Lỗi máy chủ.'}`)
-          setSaveStatus('error')
-          setLogs(['[hệ thống] Không thể tạo kế hoạch tối ưu.'])
-        })
+      worker.postMessage({ requestId, container, cargo, settings: defaultSettings })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [activeProjectId, container, cargo, projectReady, userId])
+  }, [container, cargo, projectReady])
 
   const loadedBySku = new Map<string, number>()
   for (const placement of plan?.loaded ?? []) {
@@ -265,26 +265,15 @@ function App({ userId }: { userId: string }) {
       return
     }
     setProjectStatus('')
+    const worker = workerRef.current
+    if (!worker) {
+      return
+    }
     const requestId = ++requestIdRef.current
     setPlan(null)
     setSelectedPlacement(null)
     setLogs(['[hệ thống] Đang tối ưu dữ liệu hiện tại...'])
-    setSaveStatus('saving')
-    void calculateProjectPlan(activeProjectId, userId, container, cargo)
-      .then((result) => {
-        if (requestId !== requestIdRef.current) return
-        setPlan(result)
-        setLoadedPage(1)
-        setLogs(result.logs)
-        setSelectedPlacement(result.loaded[0] ?? null)
-        setSaveStatus('saved')
-      })
-      .catch((error: unknown) => {
-        if (requestId !== requestIdRef.current) return
-        setProjectStatus(`Tối ưu thất bại: ${error instanceof Error ? error.message : 'Lỗi máy chủ.'}`)
-        setSaveStatus('error')
-        setLogs(['[hệ thống] Không thể tạo kế hoạch tối ưu.'])
-      })
+    worker.postMessage({ requestId, container, cargo, settings: defaultSettings })
   }
 
   const handleProjectChange = async (projectId: string) => {
@@ -952,8 +941,10 @@ function App({ userId }: { userId: string }) {
               <li>Không có kiện nào bị bỏ lại trong lần tối ưu hiện tại.</li>
             )}
           </ul>
-          {plan && plan.unloaded.length === 0 && plan.loaded.length > 0 && (
-            <p className="explanation">Toàn bộ số lượng hàng đã nhập đều được xếp trong phương án này.</p>
+          {cargo[0] && (
+            <p className="explanation">
+              {explainPlacementIssue(cargo[0], container, plan?.loaded ?? [], defaultSettings)}
+            </p>
           )}
         </section>
       </main>

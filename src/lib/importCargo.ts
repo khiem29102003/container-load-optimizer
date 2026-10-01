@@ -1,4 +1,4 @@
-import { normalizeCargo } from './cargoTools'
+import { normalizeCargo } from '../optimizer/engine'
 import type { CargoSpec } from '../types'
 
 type SpreadsheetRow = Record<string, unknown>
