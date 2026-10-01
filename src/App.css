@@ -277,6 +277,17 @@ button:hover {
   background: rgba(127, 29, 29, 0.2);
 }
 
+.import-message {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.16);
+  color: #ccfbf1;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .stats-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));

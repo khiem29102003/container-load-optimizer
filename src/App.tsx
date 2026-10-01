@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ChangeEvent, useEffect, useRef, useState } from 'react'
 import { defaultContainer } from './data/defaults'
 import { createTemplateCsv, estimateAdditionalQuantity, explainPlacementIssue, normalizeCargo } from './optimizer/engine'
+import { mapCargoGrid } from './lib/importCargo'
 import { supabase } from './lib/supabase'
 import type { CargoSpec, ContainerSpec, LoadingProject, OptimizationResult, Placement } from './types'
 import './App.css'
@@ -69,6 +70,7 @@ function App({ userId }: { userId: string }) {
   const [projectReady, setProjectReady] = useState(false)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [projectStatus, setProjectStatus] = useState('')
+  const [importStatus, setImportStatus] = useState('')
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading')
   const [container, setContainer] = useState<ContainerSpec>(defaultContainer)
   const [cargo, setCargo] = useState<CargoSpec[]>([])
@@ -482,9 +484,10 @@ function App({ userId }: { userId: string }) {
     if (!file) {
       return
     }
+    setImportStatus('')
 
     if (file.size > 10 * 1024 * 1024) {
-      setProjectStatus('File quá lớn. Vui lòng chọn file dưới 10 MB.')
+      setImportStatus('File quá lớn. Vui lòng chọn file dưới 10 MB.')
       event.target.value = ''
       return
     }
@@ -493,47 +496,30 @@ function App({ userId }: { userId: string }) {
       const XLSX = await import('xlsx')
       const arrayBuffer = await file.arrayBuffer()
       const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-      const sheetName = workbook.SheetNames[0]
-      if (!sheetName) throw new Error('File không có sheet dữ liệu.')
-      const sheet = workbook.Sheets[sheetName]
-      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' })
+      let bestSheet = ''
+      let bestImport = { items: [] as CargoSpec[], warnings: [] as string[], headers: [] as string[] }
+      for (const sheetName of workbook.SheetNames) {
+        const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: '' })
+        const candidate = mapCargoGrid(rows)
+        if (candidate.items.length > bestImport.items.length || (bestImport.headers.length === 0 && candidate.headers.length > 0)) {
+          bestSheet = sheetName
+          bestImport = candidate
+        }
+      }
 
-      const data = rows.map((row, index) =>
-        normalizeCargo({
-          id: `import-${index + 1}`,
-          sku: String(row.sku ?? row.SKU ?? `SKU-${index + 1}`),
-          name: String(row.name ?? row.Name ?? `Imported Cargo ${index + 1}`),
-          length: Number(row.length ?? row.L ?? row.dai ?? row['Length'] ?? 0),
-          width: Number(row.width ?? row.W ?? row.rong ?? row['Width'] ?? 0),
-          height: Number(row.height ?? row.H ?? row.cao ?? row['Height'] ?? 0),
-          weight: Number(row.weight ?? row.kg ?? row['Weight'] ?? row['kg'] ?? 0),
-          quantity: Number(row.quantity ?? row.qty ?? row['Quantity'] ?? row['Qty'] ?? 1),
-          fragile: String(row.fragile ?? row.Fragile ?? 'false').toLowerCase() === 'true',
-          stackable: String(row.stackable ?? row.Stackable ?? 'true').toLowerCase() !== 'false',
-          maxStackWeight: Number(row.maxstackweight ?? row.MaxStackWeight ?? 0),
-          maxLayers: Number(row.maxlayers ?? row.MaxLayers ?? 1),
-          noRotate: String(row.norotate ?? row.NoRotate ?? 'false').toLowerCase() === 'true',
-          thisSideUp: String(row.thissideup ?? row.ThisSideUp ?? 'false').toLowerCase() === 'true',
-          floorOnly: String(row.flooronly ?? row.FloorOnly ?? 'false').toLowerCase() === 'true',
-          priority: Number(row.priority ?? row.Priority ?? 1),
-          group: String(row.group ?? row.Group ?? 'general'),
-          unloadSequence: Number(row.unloadsequence ?? row.UnloadSequence ?? 1),
-          clearance: Number(row.clearance ?? row.Clearance ?? 0),
-          temperatureGroup: String(row.temperaturegroup ?? row.TemperatureGroup ?? 'normal'),
-          notes: String(row.notes ?? row.Notes ?? ''),
-        }),
-      )
-
-      if (data.length > 0) {
+      if (bestImport.items.length > 0) {
         setSaveStatus('saving')
-        setProjectStatus('')
         setPlan(null)
-        setCargo(data)
+        setCargo(bestImport.items)
+        setImportStatus(bestImport.warnings.length > 0
+          ? `Đã nhập ${bestImport.items.length} dòng từ sheet “${bestSheet}”; bỏ qua ${bestImport.warnings.length} dòng. ${bestImport.warnings.slice(0, 2).join(' ')}`
+          : `Đã nhập ${bestImport.items.length} dòng từ sheet “${bestSheet}”.`)
       } else {
-        setProjectStatus('File không có dòng hàng hóa hợp lệ.')
+        const detectedHeaders = bestImport.headers.length > 0 ? bestImport.headers.join(', ') : 'không nhận diện được tiêu đề cột'
+        setImportStatus(`Không tìm thấy dòng hàng hóa hợp lệ. Cột đọc được: ${detectedHeaders}. Cần có Dài, Rộng, Cao hoặc Quy cách dạng D×R×C.`)
       }
     } catch (error) {
-      setProjectStatus(`Không đọc được file: ${error instanceof Error ? error.message : 'Định dạng không hợp lệ.'}`)
+      setImportStatus(`Không đọc được file: ${error instanceof Error ? error.message : 'Định dạng không hợp lệ.'}`)
     } finally {
       event.target.value = ''
     }
@@ -660,6 +646,7 @@ function App({ userId }: { userId: string }) {
           </div>
         </header>
         {projectStatus && <p className="project-message" role="alert">{projectStatus}</p>}
+        {importStatus && <p className="import-message" role="status">{importStatus}</p>}
 
         <section className="stats-row" id="dashboard">
           {resultCards.map((card) => (

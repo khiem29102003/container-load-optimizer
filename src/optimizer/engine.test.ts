@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { mapCargoGrid, mapCargoRows } from '../lib/importCargo'
 import { estimateAdditionalQuantity, findPlacement, getRotationOptions, runOptimizer, validatePlacement } from './engine'
 
 function createCubeCargo(id: string, sku: string, quantity: number) {
@@ -103,5 +104,69 @@ describe('optimizer engine', () => {
     )
 
     assert.equal(estimate, 2)
+  })
+
+  it('maps Vietnamese cargo headers and converts centimeter dimensions to millimeters', () => {
+    const result = mapCargoRows([{
+      'Mã hàng': 'GC-01',
+      'Tên hàng': 'Thùng giấy',
+      'Dài (cm)': 10,
+      'Rộng (cm)': 20,
+      'Cao (cm)': 30,
+      'Trọng lượng (kg)': 5,
+      'Số lượng': 7,
+    }])
+
+    assert.equal(result.items.length, 1)
+    assert.equal(result.items[0].sku, 'GC-01')
+    assert.equal(result.items[0].length, 100)
+    assert.equal(result.items[0].width, 200)
+    assert.equal(result.items[0].height, 300)
+    assert.equal(result.items[0].quantity, 7)
+  })
+
+  it('finds the cargo header below a title row and parses composite dimensions', () => {
+    const result = mapCargoGrid([
+      ['QUY CÁCH - GC'],
+      ['Mã hàng', 'Tên', 'Quy cách (mm)', 'SL'],
+      ['GC-02', 'Pallet', '1200 x 800 x 1000', 3],
+    ])
+
+    assert.equal(result.items.length, 1)
+    assert.equal(result.items[0].sku, 'GC-02')
+    assert.equal(result.items[0].length, 1200)
+    assert.equal(result.items[0].width, 800)
+    assert.equal(result.items[0].height, 1000)
+    assert.equal(result.items[0].quantity, 3)
+  })
+
+  it('maps L/W/H columns and parses formatted metric values', () => {
+    const result = mapCargoRows([{
+      SKU: 'GC-03',
+      Name: 'Crate',
+      'L (mm)': '1.200',
+      'W (mm)': '800',
+      'H (mm)': '600',
+      Qty: '1,5',
+    }])
+
+    assert.equal(result.items.length, 1)
+    assert.equal(result.items[0].length, 1200)
+    assert.equal(result.items[0].width, 800)
+    assert.equal(result.items[0].height, 600)
+    assert.equal(result.items[0].quantity, 1.5)
+  })
+
+  it('converts meter-based dimension headers to millimeters', () => {
+    const result = mapCargoRows([{
+      'Mã hàng': 'GC-04',
+      'Dài (m)': 1.2,
+      'Rộng (m)': 2.4,
+      'Cao (m)': 2.5,
+    }])
+
+    assert.equal(result.items[0].length, 1200)
+    assert.equal(result.items[0].width, 2400)
+    assert.equal(result.items[0].height, 2500)
   })
 })
