@@ -8,7 +8,7 @@ import type {
   StrategyName,
   UnloadedItem,
   ValidationResult,
-} from '../types'
+} from '../types.ts'
 
 const DEFAULT_SETTINGS: OptimizationSettings = {
   minSupportRatio: 0.6,
@@ -539,7 +539,12 @@ export function createTemplateCsv(): string {
   return rows.map((row) => row.join(',')).join('\n')
 }
 
-export function explainPlacementIssue(item: CargoSpec, container: ContainerSpec, placements: Placement[], settings: OptimizationSettings = DEFAULT_SETTINGS): string {
+export function explainPlacementIssue(
+  item: CargoSpec,
+  container: ContainerSpec,
+  placements: Placement[],
+  settings: Pick<OptimizationSettings, 'minSupportRatio'> = { minSupportRatio: DEFAULT_SETTINGS.minSupportRatio },
+): string {
   const rotations = getRotationOptions(item)
   const reasons = [
     'Đã kiểm tra mọi hướng xoay hợp lệ.',
