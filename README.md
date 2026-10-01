@@ -1,3 +1,62 @@
+# Container Load Optimizer
+
+Container loading planner built with React, TypeScript, Vite, Three.js, and Supabase. Each account owns private loading projects. Container and cargo inputs are saved automatically, and optimization plans are stored with the project.
+## Local development
+
+Requirements: Node.js 22 LTS and npm.
+
+```cmd
+npm ci
+copy .env.example .env.local
+```
+
+Fill `.env.local` with the Supabase project URL and publishable/anon key, then run:
+
+```cmd
+npm run dev
+npm run lint
+npm test
+npm run build
+```
+
+## Supabase setup
+
+1. Create a Supabase project.
+2. Open **SQL Editor** and run [`supabase/schema.sql`](supabase/schema.sql). This creates `loading_projects` and enables row-level security. Users can only access rows whose `owner_id` matches their authenticated user ID.
+3. In **Authentication → Providers**, enable Email.
+4. In **Authentication → URL Configuration**, set the Site URL to the deployed site and add these redirect URLs:
+  - `http://localhost:5173/**`
+  - `https://YOUR-VERCEL-DOMAIN/**`
+5. In **Project Settings → API**, copy the Project URL and publishable key (or legacy anon key) into `.env.local`:
+
+```dotenv
+VITE_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR-PUBLISHABLE-OR-ANON-KEY
+```
+
+The first account creates a starter project with demo cargo. Subsequent projects are private to that account. When email confirmation is enabled, users must confirm their address before signing in; configure custom SMTP before relying on email delivery for production.
+
+The publishable/anon key is intended for browser use; row-level security is the data boundary. Never put a Supabase service-role key in a `VITE_` variable or in frontend code.
+
+## Vercel deployment
+
+Connect the GitHub repository and use:
+
+- Framework preset: Vite
+- Build command: `npm run build`
+- Output directory: `dist`
+- Install command: `npm ci`
+
+Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in **Project Settings → Environment Variables** for Production, Preview, and Development, then redeploy. Do not add service-role credentials.
+
+## Data and operating notes
+
+- Cargo, container, and optimization data are persisted in Supabase. Auth session tokens are stored by the Supabase client in the browser.
+- Excel/CSV parsing, optimization, and PDF/CSV/JSON exports run in the user's browser. Exported files download to that user's device.
+- The app imports `.xlsx` with SheetJS 0.20.3 from the official SheetJS CDN because the npm registry package is stale. Spreadsheet files are capped at 10 MB and the parser loads on demand.
+- Run `npm audit` after dependency updates. The production dependency audit was clean after upgrading SheetJS; review future advisories before deployment.
+- The default 40 ft GP dimensions currently match the requested exterior measurements. Replace them with verified internal dimensions before using plans for real cargo operations.
+- The optimizer is a planning aid. Validate loading, payload, center of gravity, and transport rules with qualified operations staff before shipment.
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.

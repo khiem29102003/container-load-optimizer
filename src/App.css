@@ -116,6 +116,105 @@ button:hover {
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at 15% 10%, rgba(34, 211, 238, 0.13), transparent 35%), #081018;
+  color: #e5edf5;
+}
+
+.auth-panel {
+  width: min(100%, 440px);
+  padding: 32px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+}
+
+.auth-panel .brand-mark {
+  margin-bottom: 24px;
+}
+
+.auth-panel h1 {
+  margin: 0 0 8px;
+  font-size: 1.8rem;
+}
+
+.auth-subtitle,
+.auth-panel > p:not(.eyebrow) {
+  color: #aebccc;
+  line-height: 1.6;
+}
+
+.auth-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.auth-form .primary {
+  min-height: 44px;
+}
+
+.auth-switch {
+  margin-top: 14px;
+  padding-inline: 0;
+  background: transparent;
+  color: #7dd3fc;
+}
+
+.auth-error {
+  margin: 0;
+  color: #fca5a5;
+}
+
+.auth-note {
+  color: #fbbf24 !important;
+}
+
+.auth-loading {
+  color: #cbd5e1;
+}
+
+.project-picker {
+  min-width: 170px;
+  color: #aebccc;
+  font-size: 11px;
+}
+
+.project-picker select {
+  max-width: 230px;
+  padding-block: 8px;
+}
+
+.save-status {
+  align-self: center;
+  color: #86efac;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.save-status-saving,
+.save-status-loading {
+  color: #fcd34d;
+}
+
+.save-status-error,
+.project-message {
+  color: #fca5a5;
+}
+
+.project-message {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.2);
+}
+
 .stats-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));

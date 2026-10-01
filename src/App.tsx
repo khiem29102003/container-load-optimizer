@@ -1,11 +1,11 @@
-import { type ChangeEvent, useEffect, useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
-import { jsPDF } from 'jspdf'
-import { Container3D } from './components/Container3D'
+import { lazy, Suspense, type ChangeEvent, useEffect, useRef, useState } from 'react'
 import { demoCargo, demoContainer } from './data/demo'
 import { createTemplateCsv, estimateAdditionalQuantity, explainPlacementIssue, normalizeCargo } from './optimizer/engine'
-import type { CargoSpec, ContainerSpec, OptimizationResult, Placement } from './types'
+import { supabase } from './lib/supabase'
+import type { CargoSpec, ContainerSpec, LoadingProject, OptimizationResult, Placement } from './types'
 import './App.css'
+
+const Container3D = lazy(() => import('./components/Container3D').then((module) => ({ default: module.Container3D })))
 
 const defaultSettings = {
   minSupportRatio: 0.6,
@@ -47,10 +47,36 @@ function generateAiAnswer(question: string, plan: OptimizationResult | null): st
   return `Dựa trên kế hoạch hiện tại, bộ tối ưu báo cáo ${plan.totalContainers} container, ${plan.loaded.length} kiện hàng đã xếp, và mức sử dụng thể tích ${plan.volumeUtilization.toFixed(1)}%. Ràng buộc lớn nhất hiện là hình học không gian trống còn lại và cấu trúc hàng hóa, không chỉ riêng giới hạn trọng lượng.`
 }
 
-function App() {
+async function persistProjectSnapshot(
+  projectId: string,
+  userId: string,
+  container: ContainerSpec,
+  cargo: CargoSpec[],
+  plan: OptimizationResult | null,
+): Promise<string | null> {
+  if (!supabase) return 'Chưa kết nối cơ sở dữ liệu.'
+  try {
+    const { error } = await supabase
+      .from('loading_projects')
+      .update({ container, cargo, plan })
+      .eq('id', projectId)
+      .eq('owner_id', userId)
+    return error?.message ?? null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Lỗi kết nối cơ sở dữ liệu.'
+  }
+}
+
+function App({ userId }: { userId: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const workerRef = useRef<Worker | null>(null)
   const requestIdRef = useRef(0)
+  const [projects, setProjects] = useState<LoadingProject[]>([])
+  const [activeProjectId, setActiveProjectId] = useState('')
+  const [projectReady, setProjectReady] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [projectStatus, setProjectStatus] = useState('')
+  const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading')
   const [container, setContainer] = useState<ContainerSpec>(demoContainer)
   const [cargo, setCargo] = useState<CargoSpec[]>(demoCargo)
   const [plan, setPlan] = useState<OptimizationResult | null>(null)
@@ -62,6 +88,87 @@ function App() {
 
   const totalCargoWeight = cargo.reduce((sum, item) => sum + item.weight * item.quantity, 0)
   const requestedItemCount = cargo.reduce((sum, item) => sum + Math.max(0, Math.round(item.quantity)), 0)
+
+  useEffect(() => {
+    const client = supabase
+    if (!client) return
+
+    let active = true
+    const loadProjects = async () => {
+      try {
+        const { data, error } = await client
+          .from('loading_projects')
+          .select('*')
+          .eq('owner_id', userId)
+          .order('updated_at', { ascending: false })
+
+        if (!active) return
+        if (error) {
+          setProjectStatus(`Không tải được dữ liệu: ${error.message}`)
+          setSaveStatus('error')
+          return
+        }
+
+        let ownedProjects = (data ?? []) as unknown as LoadingProject[]
+        if (ownedProjects.length === 0) {
+          const { data: created, error: createError } = await client
+            .from('loading_projects')
+            .insert({ owner_id: userId, name: 'Dự án đầu tiên', container: demoContainer, cargo: demoCargo, plan: null })
+            .select('*')
+            .single()
+
+          if (!active) return
+          if (createError || !created) {
+            setProjectStatus(`Không tạo được dự án đầu tiên: ${createError?.message ?? 'Lỗi không xác định'}`)
+            setSaveStatus('error')
+            return
+          }
+          ownedProjects = [created as unknown as LoadingProject]
+        }
+
+        const firstProject = ownedProjects[0]
+        setProjects(ownedProjects)
+        setActiveProjectId(firstProject.id)
+        setContainer(firstProject.container)
+        setCargo(firstProject.cargo)
+        setPlan(firstProject.plan)
+        setSelectedPlacement(firstProject.plan?.loaded[0] ?? null)
+        setProjectReady(true)
+        setSaveStatus('saved')
+      } catch (error) {
+        if (!active) return
+        setProjectStatus(`Không kết nối được database: ${error instanceof Error ? error.message : 'Lỗi mạng.'}`)
+        setSaveStatus('error')
+      }
+    }
+
+    void loadProjects()
+    return () => { active = false }
+  }, [loadAttempt, userId])
+
+  useEffect(() => {
+    const client = supabase
+    if (!client || !projectReady || !activeProjectId) return
+
+    const timer = window.setTimeout(() => {
+      setSaveStatus('saving')
+      void persistProjectSnapshot(activeProjectId, userId, container, cargo, plan).then((error) => {
+        if (error) {
+          setProjectStatus(`Không lưu được dữ liệu: ${error}`)
+          setSaveStatus('error')
+        } else {
+          setProjectStatus('')
+          setSaveStatus('saved')
+        }
+      })
+        .catch((error: unknown) => {
+          setProjectStatus(`Không lưu được dữ liệu: ${error instanceof Error ? error.message : 'Lỗi mạng.'}`)
+          setSaveStatus('error')
+        })
+    }, 800)
+
+    return () => window.clearTimeout(timer)
+  }, [activeProjectId, cargo, container, plan, projectReady, userId])
 
   useEffect(() => {
     const worker = new Worker(new URL('./optimizer/optimizer.worker.ts', import.meta.url), { type: 'module' })
@@ -84,6 +191,7 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!projectReady) return
     const isComplete =
       container.length > 0 && container.width > 0 && container.height > 0 &&
       cargo.length > 0 && cargo.every((item) =>
@@ -107,7 +215,7 @@ function App() {
       worker.postMessage({ requestId, container, cargo, settings: defaultSettings })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [container, cargo])
+  }, [container, cargo, projectReady])
 
   const loadedBySku = new Map<string, number>()
   for (const placement of plan?.loaded ?? []) {
@@ -145,6 +253,82 @@ function App() {
     worker.postMessage({ requestId, container, cargo, settings: defaultSettings })
   }
 
+  const handleProjectChange = async (projectId: string) => {
+    const selected = projects.find((project) => project.id === projectId)
+    if (!selected || selected.id === activeProjectId) return
+    requestIdRef.current += 1
+    setSaveStatus('saving')
+    const saveError = await persistProjectSnapshot(activeProjectId, userId, container, cargo, plan)
+    if (saveError) {
+      setProjectStatus(`Không đổi được dự án vì dữ liệu hiện tại chưa lưu: ${saveError}`)
+      setSaveStatus('error')
+      return
+    }
+    setActiveProjectId(selected.id)
+    setContainer(selected.container)
+    setCargo(selected.cargo)
+    setPlan(selected.plan)
+    setSelectedPlacement(selected.plan?.loaded[0] ?? null)
+    setProjectStatus('')
+    setSaveStatus('saved')
+  }
+
+  const handleCreateProject = async () => {
+    if (!supabase) return
+    requestIdRef.current += 1
+    setProjectStatus('')
+    if (activeProjectId) {
+      setSaveStatus('saving')
+      const saveError = await persistProjectSnapshot(activeProjectId, userId, container, cargo, plan)
+      if (saveError) {
+        setProjectStatus(`Không tạo được dự án vì dữ liệu hiện tại chưa lưu: ${saveError}`)
+        setSaveStatus('error')
+        return
+      }
+    }
+    const { data, error } = await supabase
+      .from('loading_projects')
+      .insert({ owner_id: userId, name: `Dự án ${projects.length + 1}`, container: demoContainer, cargo: [], plan: null })
+      .select('*')
+      .single()
+
+    if (error || !data) {
+      setProjectStatus(`Không tạo được dự án: ${error?.message ?? 'Lỗi không xác định'}`)
+      return
+    }
+
+    const created = data as unknown as LoadingProject
+    setProjects((current) => [created, ...current])
+    setActiveProjectId(created.id)
+    setContainer(created.container)
+    setCargo(created.cargo)
+    setPlan(created.plan)
+    setSelectedPlacement(null)
+    setProjectStatus('')
+    setSaveStatus('saved')
+  }
+
+  const handleSignOut = async () => {
+    if (!supabase) return
+    if (activeProjectId) {
+      setSaveStatus('saving')
+      const saveError = await persistProjectSnapshot(activeProjectId, userId, container, cargo, plan)
+      if (saveError) {
+        setProjectStatus(`Không đăng xuất được vì dữ liệu hiện tại chưa lưu: ${saveError}`)
+        setSaveStatus('error')
+        return
+      }
+    }
+    const { error } = await supabase.auth.signOut()
+    if (error) setProjectStatus(`Không đăng xuất được: ${error.message}`)
+  }
+
+  const handleRetryProjectLoad = () => {
+    setProjectStatus('')
+    setSaveStatus('loading')
+    setLoadAttempt((current) => current + 1)
+  }
+
   const handleLoadDemo = () => {
     setContainer({ ...demoContainer })
     setCargo(demoCargo.map((item) => ({ ...item })))
@@ -162,6 +346,7 @@ function App() {
     if (amount <= 0) {
       return
     }
+    setSaveStatus('saving')
     setPlan(null)
     setCargo((current) => current.map((item) =>
       item.id === itemId ? { ...item, quantity: item.quantity + amount } : item,
@@ -170,6 +355,7 @@ function App() {
 
   const handleContainerChange = (field: keyof ContainerSpec, value: string) => {
     const parsed = Number(value)
+    setSaveStatus('saving')
     setPlan(null)
     setContainer((current) => ({
       ...current,
@@ -178,6 +364,7 @@ function App() {
   }
 
   const updateCargoRow = (index: number, field: keyof CargoSpec, value: string | boolean) => {
+    setSaveStatus('saving')
     setPlan(null)
     setCargo((current) =>
       current.map((item, itemIndex) => {
@@ -251,11 +438,13 @@ function App() {
       temperatureGroup: 'normal',
       notes: '',
     })
+    setSaveStatus('saving')
     setPlan(null)
     setCargo((current) => [...current, newRow])
   }
 
   const removeCargoRow = (index: number) => {
+    setSaveStatus('saving')
     setPlan(null)
     setCargo((current) => current.filter((_, rowIndex) => rowIndex !== index))
   }
@@ -266,43 +455,60 @@ function App() {
       return
     }
 
-    const arrayBuffer = await file.arrayBuffer()
-    const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-    const sheetName = workbook.SheetNames[0]
-    const sheet = workbook.Sheets[sheetName]
-    const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' })
-
-    const data = rows.map((row, index) =>
-      normalizeCargo({
-        id: `import-${index + 1}`,
-        sku: String(row.sku ?? row.SKU ?? `SKU-${index + 1}`),
-        name: String(row.name ?? row.Name ?? `Imported Cargo ${index + 1}`),
-        length: Number(row.length ?? row.L ?? row.dai ?? row['Length'] ?? 0),
-        width: Number(row.width ?? row.W ?? row.rong ?? row['Width'] ?? 0),
-        height: Number(row.height ?? row.H ?? row.cao ?? row['Height'] ?? 0),
-        weight: Number(row.weight ?? row.kg ?? row['Weight'] ?? row['kg'] ?? 0),
-        quantity: Number(row.quantity ?? row.qty ?? row['Quantity'] ?? row['Qty'] ?? 1),
-        fragile: String(row.fragile ?? row.Fragile ?? 'false').toLowerCase() === 'true',
-        stackable: String(row.stackable ?? row.Stackable ?? 'true').toLowerCase() !== 'false',
-        maxStackWeight: Number(row.maxstackweight ?? row.MaxStackWeight ?? 0),
-        maxLayers: Number(row.maxlayers ?? row.MaxLayers ?? 1),
-        noRotate: String(row.norotate ?? row.NoRotate ?? 'false').toLowerCase() === 'true',
-        thisSideUp: String(row.thissideup ?? row.ThisSideUp ?? 'false').toLowerCase() === 'true',
-        floorOnly: String(row.flooronly ?? row.FloorOnly ?? 'false').toLowerCase() === 'true',
-        priority: Number(row.priority ?? row.Priority ?? 1),
-        group: String(row.group ?? row.Group ?? 'general'),
-        unloadSequence: Number(row.unloadsequence ?? row.UnloadSequence ?? 1),
-        clearance: Number(row.clearance ?? row.Clearance ?? 0),
-        temperatureGroup: String(row.temperaturegroup ?? row.TemperatureGroup ?? 'normal'),
-        notes: String(row.notes ?? row.Notes ?? ''),
-      }),
-    )
-
-    if (data.length > 0) {
-      setPlan(null)
-      setCargo(data)
+    if (file.size > 10 * 1024 * 1024) {
+      setProjectStatus('File quá lớn. Vui lòng chọn file dưới 10 MB.')
+      event.target.value = ''
+      return
     }
-    event.target.value = ''
+
+    try {
+      const XLSX = await import('xlsx')
+      const arrayBuffer = await file.arrayBuffer()
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+      const sheetName = workbook.SheetNames[0]
+      if (!sheetName) throw new Error('File không có sheet dữ liệu.')
+      const sheet = workbook.Sheets[sheetName]
+      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' })
+
+      const data = rows.map((row, index) =>
+        normalizeCargo({
+          id: `import-${index + 1}`,
+          sku: String(row.sku ?? row.SKU ?? `SKU-${index + 1}`),
+          name: String(row.name ?? row.Name ?? `Imported Cargo ${index + 1}`),
+          length: Number(row.length ?? row.L ?? row.dai ?? row['Length'] ?? 0),
+          width: Number(row.width ?? row.W ?? row.rong ?? row['Width'] ?? 0),
+          height: Number(row.height ?? row.H ?? row.cao ?? row['Height'] ?? 0),
+          weight: Number(row.weight ?? row.kg ?? row['Weight'] ?? row['kg'] ?? 0),
+          quantity: Number(row.quantity ?? row.qty ?? row['Quantity'] ?? row['Qty'] ?? 1),
+          fragile: String(row.fragile ?? row.Fragile ?? 'false').toLowerCase() === 'true',
+          stackable: String(row.stackable ?? row.Stackable ?? 'true').toLowerCase() !== 'false',
+          maxStackWeight: Number(row.maxstackweight ?? row.MaxStackWeight ?? 0),
+          maxLayers: Number(row.maxlayers ?? row.MaxLayers ?? 1),
+          noRotate: String(row.norotate ?? row.NoRotate ?? 'false').toLowerCase() === 'true',
+          thisSideUp: String(row.thissideup ?? row.ThisSideUp ?? 'false').toLowerCase() === 'true',
+          floorOnly: String(row.flooronly ?? row.FloorOnly ?? 'false').toLowerCase() === 'true',
+          priority: Number(row.priority ?? row.Priority ?? 1),
+          group: String(row.group ?? row.Group ?? 'general'),
+          unloadSequence: Number(row.unloadsequence ?? row.UnloadSequence ?? 1),
+          clearance: Number(row.clearance ?? row.Clearance ?? 0),
+          temperatureGroup: String(row.temperaturegroup ?? row.TemperatureGroup ?? 'normal'),
+          notes: String(row.notes ?? row.Notes ?? ''),
+        }),
+      )
+
+      if (data.length > 0) {
+        setSaveStatus('saving')
+        setProjectStatus('')
+        setPlan(null)
+        setCargo(data)
+      } else {
+        setProjectStatus('File không có dòng hàng hóa hợp lệ.')
+      }
+    } catch (error) {
+      setProjectStatus(`Không đọc được file: ${error instanceof Error ? error.message : 'Định dạng không hợp lệ.'}`)
+    } finally {
+      event.target.value = ''
+    }
   }
 
   const handleAskAi = () => {
@@ -330,7 +536,8 @@ function App() {
     downloadBlob(csv, 'loading-plan.csv', 'text/csv;charset=utf-8;')
   }
 
-  const exportPdf = () => {
+  const exportPdf = async () => {
+    const { jsPDF } = await import('jspdf')
     const pdf = new jsPDF()
     pdf.setFontSize(18)
     pdf.text('Container Load Optimizer AI', 14, 18)
@@ -353,6 +560,20 @@ function App() {
     { label: 'Tỷ lệ tải trọng', value: plan ? `${plan.payloadUtilization.toFixed(1)}%` : '0.0%' },
     { label: 'Điểm tối ưu', value: plan ? `${plan.score.toFixed(1)}/100` : '0/100' },
   ]
+
+  if (!projectReady) {
+    return (
+      <main className="auth-page">
+        <section className="auth-panel">
+          <p className="eyebrow">DỮ LIỆU DỰ ÁN</p>
+          <h1>{saveStatus === 'error' ? 'Không tải được dữ liệu' : 'Đang tải dự án...'}</h1>
+          {projectStatus && <p className="auth-error" role="alert">{projectStatus}</p>}
+          {saveStatus === 'error' && <button type="button" className="primary" onClick={handleRetryProjectLoad}>Thử kết nối lại</button>}
+          <button type="button" className="auth-switch" onClick={() => void handleSignOut()}>Đăng xuất</button>
+        </section>
+      </main>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -381,6 +602,16 @@ function App() {
             <h1>Container Load Optimizer AI</h1>
           </div>
           <div className="actions">
+            <label className="project-picker">Dự án
+              <select value={activeProjectId} onChange={(event) => handleProjectChange(event.target.value)} disabled={!projectReady}>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              </select>
+            </label>
+            <button type="button" className="secondary" onClick={() => void handleCreateProject()} disabled={!projectReady}>Dự án mới</button>
+            <span className={`save-status save-status-${saveStatus}`} role="status">
+              {saveStatus === 'loading' ? 'Đang tải...' : saveStatus === 'saving' ? 'Đang lưu...' : saveStatus === 'error' ? 'Lỗi lưu' : 'Đã lưu'}
+            </span>
+            <button type="button" className="ghost" onClick={() => void handleSignOut()}>Đăng xuất</button>
             <button type="button" className="primary" onClick={handleLoadDemo}>🚀 CHẠY DEMO TỐI ƯU</button>
             <button type="button" className="secondary" onClick={() => fileInputRef.current?.click()}>Nhập Excel/CSV</button>
             <button type="button" className="secondary" onClick={handleOptimize}>Tối ưu</button>
@@ -388,6 +619,7 @@ function App() {
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={handleImport} />
           </div>
         </header>
+        {projectStatus && <p className="project-message" role="alert">{projectStatus}</p>}
 
         <section className="stats-row">
           {resultCards.map((card) => (
@@ -407,6 +639,7 @@ function App() {
               <label>
                 Loại container
                 <select value={container.name} onChange={(event) => {
+                  setSaveStatus('saving')
                   setPlan(null)
                   setContainer((current) => ({ ...current, name: event.target.value }))
                 }}>
@@ -504,7 +737,9 @@ function App() {
             </div>
             <div className="viewer">
               {plan ? (
-                <Container3D container={container} placements={plan.loaded.filter((item) => item.containerIndex === 1)} view={view} />
+                <Suspense fallback={<div className="empty-state">Đang tải mô hình 3D...</div>}>
+                  <Container3D container={container} placements={plan.loaded.filter((item) => item.containerIndex === 1)} view={view} />
+                </Suspense>
               ) : (
                 <div className="empty-state">Tải dữ liệu demo hoặc chạy tối ưu để hiển thị kế hoạch 3D.</div>
               )}

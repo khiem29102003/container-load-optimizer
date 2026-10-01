@@ -118,3 +118,14 @@ export interface OptimizationResult {
   centerOfGravity: { x: number; y: number; z: number }
   bestSolution?: string
 }
+
+export interface LoadingProject {
+  id: string
+  owner_id: string
+  name: string
+  container: ContainerSpec
+  cargo: CargoSpec[]
+  plan: OptimizationResult | null
+  created_at: string
+  updated_at: string
+}
