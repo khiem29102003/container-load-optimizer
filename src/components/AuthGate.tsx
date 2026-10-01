@@ -68,7 +68,6 @@ export function AuthGate({ children }: AuthGateProps) {
 }
 
 function EmailAuthForm({ initialError }: { initialError: string }) {
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
@@ -102,23 +101,11 @@ function EmailAuthForm({ initialError }: { initialError: string }) {
     setMessage('')
 
     try {
-      if (mode === 'signup') {
-        const { data, error: requestError } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: { emailRedirectTo: window.location.origin },
-        })
-        if (requestError) throw requestError
-        if (!data.session) {
-          setMessage('Tài khoản đã được tạo. Hãy xác nhận email rồi đăng nhập.')
-        }
-      } else {
-        const { error: requestError } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        })
-        if (requestError) throw requestError
-      }
+      const { error: requestError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      })
+      if (requestError) throw requestError
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Không thể xác thực tài khoản.')
     } finally {
@@ -131,29 +118,22 @@ function EmailAuthForm({ initialError }: { initialError: string }) {
       <section className="auth-panel">
         <div className="brand-mark">CL</div>
         <p className="eyebrow">CONTAINER LOAD OPTIMIZER</p>
-        <h1>{mode === 'signin' ? 'Đăng nhập' : 'Tạo tài khoản'}</h1>
+        <h1>Đăng nhập</h1>
         <p className="auth-subtitle">Dữ liệu dự án được lưu riêng trong tài khoản của bạn.</p>
         <form className="auth-form" onSubmit={handleSubmit}>
           <label>Email
             <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
           </label>
           <label>Mật khẩu
-            <input type="password" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <input type="password" autoComplete="current-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required />
           </label>
           {error && <p className="auth-error" role="alert">{error}</p>}
           {message && <p className="auth-note" role="status">{message}</p>}
           <button type="submit" className="primary" disabled={submitting}>
-            {submitting ? 'Đang xử lý...' : mode === 'signin' ? 'Đăng nhập' : 'Tạo tài khoản'}
+            {submitting ? 'Đang xử lý...' : 'Đăng nhập'}
           </button>
         </form>
-        {mode === 'signin' && <button type="button" className="auth-switch" onClick={() => void handlePasswordReset()} disabled={submitting}>Quên mật khẩu?</button>}
-        <button type="button" className="auth-switch" onClick={() => {
-          setMode((current) => current === 'signin' ? 'signup' : 'signin')
-          setError('')
-          setMessage('')
-        }}>
-          {mode === 'signin' ? 'Chưa có tài khoản? Đăng ký' : 'Đã có tài khoản? Đăng nhập'}
-        </button>
+        <button type="button" className="auth-switch" onClick={() => void handlePasswordReset()} disabled={submitting}>Quên mật khẩu?</button>
       </section>
     </main>
   )

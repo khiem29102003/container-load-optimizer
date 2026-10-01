@@ -34,7 +34,7 @@ VITE_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR-PUBLISHABLE-OR-ANON-KEY
 ```
 
-The first account creates a starter project with demo cargo. Subsequent projects are private to that account. When email confirmation is enabled, users must confirm their address before signing in; configure custom SMTP before relying on email delivery for production.
+Self-service registration is disabled. An administrator creates accounts in **Authentication → Users → Add user**; for controlled testing, the administrator may confirm the user from the dashboard. The first successful login creates a starter project with demo cargo. Subsequent projects are private to that account. Configure custom SMTP before relying on confirmation or password-reset emails for production.
 
 The publishable/anon key is intended for browser use; row-level security is the data boundary. Never put a Supabase service-role key in a `VITE_` variable or in frontend code.
 
