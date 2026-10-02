@@ -402,6 +402,11 @@ textarea {
   max-height: 340px;
 }
 
+table tfoot {
+  background: rgba(34, 211, 238, 0.08);
+  font-weight: 700;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

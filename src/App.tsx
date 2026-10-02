@@ -13,6 +13,7 @@ const navigationItems = [
   { label: 'Hàng hóa', target: '#cargo', short: 'HH' },
   { label: '3D Loading', target: '#visualization', short: '3D' },
   { label: 'Kết quả', target: '#results', short: 'KQ' },
+  { label: 'Tổng hợp mã hàng', target: '#cargo-summary', short: 'TH' },
   { label: 'Xuất báo cáo', target: '#reports', short: 'BC' },
 ] as const
 
@@ -258,6 +259,19 @@ function App({ userId }: { userId: string }) {
     }
     return summary
   }, [])
+  const containerIndexes = plan?.containers.map((containerPlan) => containerPlan.index) ?? []
+  const loadedByContainerAndSku = new Map<string, Map<number, number>>()
+  for (const placement of plan?.loaded ?? []) {
+    const containerCounts = loadedByContainerAndSku.get(placement.sku) ?? new Map<number, number>()
+    containerCounts.set(placement.containerIndex, (containerCounts.get(placement.containerIndex) ?? 0) + 1)
+    loadedByContainerAndSku.set(placement.sku, containerCounts)
+  }
+  const cargoLoadSummary = cargoSummary.map((item) => ({
+    ...item,
+    loaded: loadedBySku.get(item.sku) ?? 0,
+    remaining: Math.max(0, item.requested - (loadedBySku.get(item.sku) ?? 0)),
+    byContainer: containerIndexes.map((index) => loadedByContainerAndSku.get(item.sku)?.get(index) ?? 0),
+  }))
 
   const handleOptimize = () => {
     if (cargo.length === 0) {
@@ -859,6 +873,56 @@ function App({ userId }: { userId: string }) {
               <p className="empty-state small">Chọn một kiện hàng từ kế hoạch để xem chi tiết.</p>
             )}
           </div>
+        </section>
+
+        <section className="panel bottom-panel" id="cargo-summary">
+          <div className="panel-header">
+            <h3>Tổng hợp số lượng theo mã hàng sau khi lên container</h3>
+          </div>
+          {!plan ? (
+            <p className="empty-state small">Chạy tối ưu để xem số lượng đã xếp theo từng mã hàng và container.</p>
+          ) : (
+            <div className="table-wrap cargo-summary">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Mã hàng</th>
+                    <th>Tên hàng</th>
+                    <th>Yêu cầu</th>
+                    {containerIndexes.map((index) => <th key={index}>Container {index}</th>)}
+                    <th>Tổng đã xếp</th>
+                    <th>Còn lại</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cargoLoadSummary.map((item) => (
+                    <tr key={item.sku}>
+                      <td>{item.sku}</td>
+                      <td>{item.name}</td>
+                      <td>{item.requested}</td>
+                      {item.byContainer.map((quantity, index) => <td key={containerIndexes[index]}>{quantity}</td>)}
+                      <td>{item.loaded}</td>
+                      <td>{item.remaining}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {cargoLoadSummary.length > 0 && (
+                  <tfoot>
+                    <tr>
+                      <th colSpan={3}>Tổng số kiện</th>
+                      {containerIndexes.map((containerIndex) => (
+                        <td key={containerIndex}>
+                          {plan.loaded.filter((item) => item.containerIndex === containerIndex).length}
+                        </td>
+                      ))}
+                      <td>{plan.loaded.length}</td>
+                      <td>{Math.max(0, requestedItemCount - plan.loaded.length)}</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          )}
         </section>
 
         <section className="panel bottom-panel" id="reports">
