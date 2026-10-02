@@ -2,8 +2,9 @@
   font-family: Inter, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #e2e8f0;
-  background: #020817;
+  color: #172b4d;
+  background: #f3f6f8;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -11,13 +12,13 @@
 }
 
 html {
-  background: #020817;
+  background: #f3f6f8;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: #020817;
+  background: #f3f6f8;
 }
 
 * {

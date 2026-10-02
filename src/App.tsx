@@ -77,6 +77,7 @@ function App({ userId }: { userId: string }) {
   const [cargo, setCargo] = useState<CargoSpec[]>([])
   const [plan, setPlan] = useState<OptimizationResult | null>(null)
   const [logs, setLogs] = useState<string[]>(['[hệ thống] Đang tải dự án của bạn.'])
+  const [optimizationStatus, setOptimizationStatus] = useState<'idle' | 'running' | 'complete' | 'error'>('idle')
   const [selectedPlacement, setSelectedPlacement] = useState<Placement | null>(null)
   const [view, setView] = useState<'front' | 'top'>('front')
   const [loadedPage, setLoadedPage] = useState(1)
@@ -197,11 +198,15 @@ function App({ userId }: { userId: string }) {
       }
       const result = event.data.result
       setPlan(result)
+      setOptimizationStatus('complete')
       setLoadedPage(1)
       setLogs(result.logs)
       setSelectedPlacement(result.loaded[0] ?? null)
     }
-    worker.onerror = () => setLogs(['[hệ thống] Không thể chạy bộ tối ưu. Vui lòng thử lại.'])
+    worker.onerror = () => {
+      setOptimizationStatus('error')
+      setLogs(['[hệ thống] Không thể chạy bộ tối ưu. Vui lòng thử lại.'])
+    }
 
     return () => {
       worker.terminate()
@@ -229,6 +234,7 @@ function App({ userId }: { userId: string }) {
         return
       }
       setPlan(null)
+      setOptimizationStatus('running')
       setSelectedPlacement(null)
       setLogs(['[hệ thống] Đang tối ưu dữ liệu hiện tại...'])
       worker.postMessage({ requestId, container, cargo, settings: defaultSettings })
@@ -285,6 +291,7 @@ function App({ userId }: { userId: string }) {
     }
     const requestId = ++requestIdRef.current
     setPlan(null)
+    setOptimizationStatus('running')
     setSelectedPlacement(null)
     setLogs(['[hệ thống] Đang tối ưu dữ liệu hiện tại...'])
     worker.postMessage({ requestId, container, cargo, settings: defaultSettings })
@@ -654,13 +661,38 @@ function App({ userId }: { userId: string }) {
             </span>
             <button type="button" className="ghost" onClick={() => void handleSignOut()}>Đăng xuất</button>
             <button type="button" className="secondary" onClick={() => fileInputRef.current?.click()}>Nhập Excel/CSV</button>
-            <button type="button" className="primary" onClick={handleOptimize} disabled={cargo.length === 0}>Tối ưu</button>
+            <button type="button" className="primary optimize-button" onClick={handleOptimize} disabled={cargo.length === 0 || optimizationStatus === 'running'}>
+              {optimizationStatus === 'running' ? 'Đang tối ưu...' : 'Tối ưu'}
+            </button>
             <button type="button" className="ghost" onClick={handleReset} disabled={!plan}>Xóa kế hoạch</button>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={handleImport} />
           </div>
         </header>
         {projectStatus && <p className="project-message" role="alert">{projectStatus}</p>}
         {importStatus && <p className="import-message" role="status">{importStatus}</p>}
+        {optimizationStatus === 'running' && (
+          <div className="optimization-banner optimization-banner-running" role="status" aria-live="polite">
+            <span className="optimization-spinner" aria-hidden="true" />
+            <div className="optimization-copy">
+              <strong>Đang tối ưu cách xếp hàng</strong>
+              <span>Đang kiểm tra vị trí, hướng xoay, tải trọng và các ràng buộc của kiện hàng.</span>
+            </div>
+            <div className="optimization-progress-track" role="progressbar" aria-label="Đang tối ưu" aria-valuetext="Đang tính toán">
+              <span />
+            </div>
+          </div>
+        )}
+        {optimizationStatus === 'complete' && plan && (
+          <div className="optimization-banner optimization-banner-complete" role="status" aria-live="polite">
+            <strong>Đã tối ưu xong</strong>
+            <span>{plan.loaded.length} kiện được xếp trong {plan.totalContainers} container.</span>
+          </div>
+        )}
+        {optimizationStatus === 'error' && (
+          <div className="optimization-banner optimization-banner-error" role="alert">
+            Không thể hoàn tất tối ưu. Kiểm tra dữ liệu hàng hóa rồi thử lại.
+          </div>
+        )}
 
         <section className="stats-row" id="dashboard">
           {resultCards.map((card) => (
