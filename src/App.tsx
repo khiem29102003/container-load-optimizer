@@ -77,7 +77,7 @@ function App({ userId }: { userId: string }) {
   const [cargo, setCargo] = useState<CargoSpec[]>([])
   const [plan, setPlan] = useState<OptimizationResult | null>(null)
   const [logs, setLogs] = useState<string[]>(['[hệ thống] Đang tải dự án của bạn.'])
-  const [optimizationStatus, setOptimizationStatus] = useState<'idle' | 'running' | 'complete' | 'error'>('idle')
+  const [optimizationStatus, setOptimizationStatus] = useState<'idle' | 'ready' | 'running' | 'complete' | 'error'>('idle')
   const [selectedPlacement, setSelectedPlacement] = useState<Placement | null>(null)
   const [view, setView] = useState<'front' | 'top'>('front')
   const [viewedContainerIndex, setViewedContainerIndex] = useState(1)
@@ -88,11 +88,24 @@ function App({ userId }: { userId: string }) {
 
   const totalCargoWeight = cargo.reduce((sum, item) => sum + item.weight * item.quantity, 0)
   const requestedItemCount = cargo.reduce((sum, item) => sum + Math.max(0, Math.round(item.quantity)), 0)
+  const canOptimize =
+    container.length > 0 && container.width > 0 && container.height > 0 &&
+    cargo.length > 0 && cargo.every((item) =>
+      item.sku.trim() && item.name.trim() && item.length > 0 && item.width > 0 && item.height > 0 &&
+      item.weight >= 0 && item.quantity >= 0,
+    )
   const loadedItems = plan?.loaded ?? []
   const loadedPageCount = Math.max(1, Math.ceil(loadedItems.length / loadedPageSize))
   const currentLoadedPage = Math.min(loadedPage, loadedPageCount)
   const firstLoadedIndex = (currentLoadedPage - 1) * loadedPageSize
   const visibleLoadedItems = loadedItems.slice(firstLoadedIndex, firstLoadedIndex + loadedPageSize)
+
+  const markOptimizationPending = (hasCargo = canOptimize) => {
+    requestIdRef.current += 1
+    setPlan(null)
+    setSelectedPlacement(null)
+    setOptimizationStatus(hasCargo ? 'ready' : 'idle')
+  }
 
   useEffect(() => {
     const sections = navigationItems
@@ -152,6 +165,7 @@ function App({ userId }: { userId: string }) {
         setContainer(firstProject.container)
         setCargo(firstProject.cargo)
         setPlan(firstProject.plan)
+        setOptimizationStatus(firstProject.plan ? 'complete' : firstProject.cargo.length > 0 ? 'ready' : 'idle')
         setSelectedPlacement(firstProject.plan?.loaded[0] ?? null)
         setProjectReady(true)
         setSaveStatus('saved')
@@ -216,34 +230,6 @@ function App({ userId }: { userId: string }) {
     }
   }, [])
 
-  useEffect(() => {
-    if (!projectReady) return
-    const isComplete =
-      container.length > 0 && container.width > 0 && container.height > 0 &&
-      cargo.length > 0 && cargo.every((item) =>
-        item.sku.trim() && item.name.trim() && item.length > 0 && item.width > 0 && item.height > 0 &&
-        item.weight >= 0 && item.quantity >= 0,
-      )
-
-    if (!isComplete) {
-      return
-    }
-
-    const requestId = ++requestIdRef.current
-    const timer = window.setTimeout(() => {
-      const worker = workerRef.current
-      if (!worker) {
-        return
-      }
-      setPlan(null)
-      setOptimizationStatus('running')
-      setSelectedPlacement(null)
-      setLogs(['[hệ thống] Đang tối ưu dữ liệu hiện tại...'])
-      worker.postMessage({ requestId, container, cargo, settings: defaultSettings })
-    }, 500)
-    return () => window.clearTimeout(timer)
-  }, [container, cargo, projectReady])
-
   const loadedBySku = new Map<string, number>()
   for (const placement of plan?.loaded ?? []) {
     loadedBySku.set(placement.sku, (loadedBySku.get(placement.sku) ?? 0) + 1)
@@ -283,8 +269,8 @@ function App({ userId }: { userId: string }) {
   }))
 
   const handleOptimize = () => {
-    if (cargo.length === 0) {
-      setProjectStatus('Thêm ít nhất một dòng hàng hóa trước khi tối ưu.')
+    if (!canOptimize) {
+      setProjectStatus('Kiểm tra container và bảo đảm mỗi dòng hàng có mã, tên, kích thước Dài/Rộng/Cao hợp lệ trước khi tối ưu.')
       return
     }
     setProjectStatus('')
@@ -315,6 +301,7 @@ function App({ userId }: { userId: string }) {
     setContainer(selected.container)
     setCargo(selected.cargo)
     setPlan(selected.plan)
+    setOptimizationStatus(selected.plan ? 'complete' : selected.cargo.length > 0 ? 'ready' : 'idle')
     setViewedContainerIndex(1)
     setLoadedPage(1)
     setSelectedPlacement(selected.plan?.loaded[0] ?? null)
@@ -352,6 +339,7 @@ function App({ userId }: { userId: string }) {
     setContainer(created.container)
     setCargo(created.cargo)
     setPlan(created.plan)
+    setOptimizationStatus('idle')
     setViewedContainerIndex(1)
     setLoadedPage(1)
     setSelectedPlacement(null)
@@ -381,20 +369,16 @@ function App({ userId }: { userId: string }) {
   }
 
   const handleReset = () => {
-    requestIdRef.current += 1
-    setPlan(null)
+    markOptimizationPending(canOptimize)
     setLogs(['[hệ thống] Đã xóa kế hoạch tối ưu.'])
-    setSelectedPlacement(null)
   }
 
   const handleClearCargo = () => {
     if (cargo.length === 0 || !window.confirm('Xóa toàn bộ dòng hàng hóa khỏi dự án này?')) return
-    requestIdRef.current += 1
+    markOptimizationPending(false)
     setSaveStatus('saving')
     setProjectStatus('')
     setCargo([])
-    setPlan(null)
-    setSelectedPlacement(null)
     setLogs(['[hệ thống] Đã xóa hàng hóa khỏi dự án.'])
   }
 
@@ -402,8 +386,8 @@ function App({ userId }: { userId: string }) {
     if (amount <= 0) {
       return
     }
+    markOptimizationPending(true)
     setSaveStatus('saving')
-    setPlan(null)
     setCargo((current) => current.map((item) =>
       item.id === itemId ? { ...item, quantity: item.quantity + amount } : item,
     ))
@@ -411,8 +395,8 @@ function App({ userId }: { userId: string }) {
 
   const handleContainerChange = (field: keyof ContainerSpec, value: string) => {
     const parsed = Number(value)
+    markOptimizationPending(cargo.length > 0)
     setSaveStatus('saving')
-    setPlan(null)
     setContainer((current) => ({
       ...current,
       [field]: Number.isFinite(parsed) ? parsed : current[field],
@@ -420,8 +404,8 @@ function App({ userId }: { userId: string }) {
   }
 
   const updateCargoRow = (index: number, field: keyof CargoSpec, value: string | boolean) => {
+    markOptimizationPending(true)
     setSaveStatus('saving')
-    setPlan(null)
     setCargo((current) =>
       current.map((item, itemIndex) => {
         if (itemIndex !== index) {
@@ -494,14 +478,14 @@ function App({ userId }: { userId: string }) {
       temperatureGroup: 'normal',
       notes: '',
     })
+    markOptimizationPending(true)
     setSaveStatus('saving')
-    setPlan(null)
     setCargo((current) => [...current, newRow])
   }
 
   const removeCargoRow = (index: number) => {
+    markOptimizationPending(cargo.length > 1)
     setSaveStatus('saving')
-    setPlan(null)
     setCargo((current) => current.filter((_, rowIndex) => rowIndex !== index))
   }
 
@@ -533,7 +517,7 @@ function App({ userId }: { userId: string }) {
           ? ` Đã giữ ${extraColumnCount} cột bổ sung làm thông tin tham chiếu; các cột này chưa được dùng làm ràng buộc chất xếp.`
           : ''
         setSaveStatus('saving')
-        setPlan(null)
+        markOptimizationPending(true)
         setCargo(bestImport.items)
         setImportStatus(bestImport.warnings.length > 0
           ? `Đã nhập ${bestImport.items.length} dòng từ ${bestImport.sheetNames?.length ?? 0} sheet (${bestImport.sheetNames?.join(', ')}); bỏ qua ${bestImport.warnings.length} dòng. ${bestImport.warnings.slice(0, 2).join(' ')}${extraColumnNotice}`
@@ -676,7 +660,7 @@ function App({ userId }: { userId: string }) {
             <button type="button" className="ghost" onClick={() => void handleSignOut()}>Đăng xuất</button>
             <button type="button" className="secondary" onClick={() => fileInputRef.current?.click()}>Nhập Excel/CSV</button>
             <button type="button" className="primary optimize-button" onClick={handleOptimize} disabled={cargo.length === 0 || optimizationStatus === 'running'}>
-              {optimizationStatus === 'running' ? 'Đang tối ưu...' : 'Tối ưu'}
+              {optimizationStatus === 'running' ? 'Đang tối ưu...' : optimizationStatus === 'complete' ? 'Tối ưu lại' : 'Tối ưu'}
             </button>
             <button type="button" className="ghost" onClick={handleReset} disabled={!plan}>Xóa kế hoạch</button>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={handleImport} />
