@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { mapCargoGrid, mapCargoRows } from '../lib/importCargo'
+import { mapCargoGrid, mapCargoRows, mapCargoSheets } from '../lib/importCargo'
 import { estimateAdditionalQuantity, findPlacement, getRotationOptions, runOptimizer, validatePlacement } from './engine'
 
 function createCubeCargo(id: string, sku: string, quantity: number) {
@@ -168,5 +168,47 @@ describe('optimizer engine', () => {
     assert.equal(result.items[0].length, 1200)
     assert.equal(result.items[0].width, 2400)
     assert.equal(result.items[0].height, 2500)
+  })
+
+  it('preserves added columns as metadata without losing cargo rows', () => {
+    const result = mapCargoRows([{
+      SKU: 'GC-05',
+      Name: 'Box',
+      Length: 100,
+      Width: 80,
+      Height: 60,
+      Quantity: 4,
+      'Màu sắc': 'Xanh',
+      'Mã lô bổ sung': 'LOT-2026-04',
+    }])
+
+    assert.equal(result.items.length, 1)
+    assert.deepEqual(result.items[0].extraFields, {
+      'Màu sắc': 'Xanh',
+      'Mã lô bổ sung': 'LOT-2026-04',
+    })
+  })
+
+  it('merges valid cargo rows from multiple workbook sheets', () => {
+    const result = mapCargoSheets([
+      { name: 'Hàng A', grid: [['SKU', 'Length', 'Width', 'Height'], ['A-01', 100, 80, 60]] },
+      { name: 'Hàng B', grid: [['SKU', 'Length', 'Width', 'Height'], ['B-01', 120, 90, 70]] },
+    ])
+
+    assert.equal(result.items.length, 2)
+    assert.deepEqual(result.items.map((item) => item.sku), ['A-01', 'B-01'])
+    assert.equal(new Set(result.items.map((item) => item.id)).size, 2)
+    assert.deepEqual(result.sheetNames, ['Hàng A', 'Hàng B'])
+  })
+
+  it('reports invalid cargo rows from sheets that cannot produce a placement', () => {
+    const result = mapCargoSheets([
+      { name: 'Hàng hợp lệ', grid: [['SKU', 'Length', 'Width', 'Height'], ['A-01', 100, 80, 60]] },
+      { name: 'Thiếu quy cách', grid: [['SKU', 'Name', 'Quantity'], ['B-01', 'Box', 2]] },
+    ])
+
+    assert.equal(result.items.length, 1)
+    assert.ok(result.warnings.some((warning) => warning.includes('Thiếu quy cách')))
+    assert.ok(result.warnings.some((warning) => warning.includes('Dài/Rộng/Cao')))
   })
 })

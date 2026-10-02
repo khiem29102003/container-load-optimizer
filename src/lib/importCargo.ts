@@ -12,6 +12,7 @@ export interface CargoImportResult {
   items: CargoSpec[]
   warnings: string[]
   headers: string[]
+  sheetNames?: string[]
 }
 
 const headerAliases = {
@@ -37,6 +38,7 @@ const headerAliases = {
   temperatureGroup: ['temperaturegroup', 'nhomnhietdo'],
   notes: ['notes', 'ghichu'],
 } as const
+const allHeaderAliases = Object.values(headerAliases).flat()
 
 function normalizeHeader(value: string): string {
   return value
@@ -60,6 +62,14 @@ function findCell(row: SpreadsheetRow, aliases: readonly string[]): CellValue | 
   )
   const match = exact ?? shortDimension ?? entries.find((entry) => aliases.some((alias) => alias.length > 1 && entry.key.startsWith(alias)))
   return match ? { header: match.header, value: match.value } : undefined
+}
+
+function isKnownHeader(header: string): boolean {
+  const key = normalizeHeader(header)
+  return allHeaderAliases.some((alias) =>
+    key === alias || (alias.length > 1 && key.startsWith(alias)) ||
+    (alias.length === 1 && new RegExp(`^${alias}(?:mm|cm|m)?$`).test(key)),
+  )
 }
 
 function toNumber(value: unknown): number | null {
@@ -132,7 +142,7 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
   return fallback
 }
 
-export function mapCargoRows(rows: SpreadsheetRow[]): CargoImportResult {
+export function mapCargoRows(rows: SpreadsheetRow[], headerRowNumber = 1): CargoImportResult {
   const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))].slice(0, 30)
   const items: CargoSpec[] = []
   const warnings: string[] = []
@@ -147,7 +157,7 @@ export function mapCargoRows(rows: SpreadsheetRow[]): CargoImportResult {
     const height = readDimension(row, 'height', compositeValues)
 
     if (!length || !width || !height || length < 0 || width < 0 || height < 0) {
-      warnings.push(`Dòng ${index + 2}: thiếu hoặc sai cột kích thước Dài/Rộng/Cao (hoặc Quy cách dạng D×R×C); đã bỏ qua.`)
+      warnings.push(`Dòng ${index + headerRowNumber + 1}: thiếu hoặc sai cột kích thước Dài/Rộng/Cao (hoặc Quy cách dạng D×R×C); đã bỏ qua.`)
       return
     }
 
@@ -159,11 +169,14 @@ export function mapCargoRows(rows: SpreadsheetRow[]): CargoImportResult {
     const quantityCell = findCell(row, headerAliases.quantity)
     const weight = weightCell ? toNumber(weightCell.value) : 0
     const quantity = quantityCell ? toNumber(quantityCell.value) : 1
-    if (weightCell && weight === null) warnings.push(`Dòng ${index + 2}: trọng lượng không hợp lệ, đặt bằng 0.`)
-    if (quantityCell && quantity === null) warnings.push(`Dòng ${index + 2}: số lượng không hợp lệ, đặt bằng 1.`)
+    if (weightCell && weight === null) warnings.push(`Dòng ${index + headerRowNumber + 1}: trọng lượng không hợp lệ, đặt bằng 0.`)
+    if (quantityCell && quantity === null) warnings.push(`Dòng ${index + headerRowNumber + 1}: số lượng không hợp lệ, đặt bằng 1.`)
 
     const fragileCell = findCell(row, headerAliases.fragile)
     const stackableCell = findCell(row, headerAliases.stackable)
+    const extraFields = Object.fromEntries(Object.entries(row).filter(([header, value]) =>
+      !isKnownHeader(header) && value !== null && value !== undefined && String(value).trim() !== '',
+    ))
     items.push(normalizeCargo({
       id: `import-${index + 1}`,
       sku,
@@ -186,6 +199,7 @@ export function mapCargoRows(rows: SpreadsheetRow[]): CargoImportResult {
       clearance: toNumber(findCell(row, headerAliases.clearance)?.value) ?? 0,
       temperatureGroup: String(findCell(row, headerAliases.temperatureGroup)?.value ?? 'normal'),
       notes: String(findCell(row, headerAliases.notes)?.value ?? ''),
+      extraFields,
     }))
   })
 
@@ -194,24 +208,41 @@ export function mapCargoRows(rows: SpreadsheetRow[]): CargoImportResult {
 
 export function mapCargoGrid(grid: unknown[][]): CargoImportResult {
   let best: CargoImportResult = { items: [], warnings: [], headers: [] }
-  const recognizedAliases = Object.values(headerAliases).flat()
-
   for (let headerIndex = 0; headerIndex < Math.min(grid.length, 20); headerIndex += 1) {
     const rawHeaders = grid[headerIndex]
     if (!rawHeaders) continue
     const headers = rawHeaders.map((value, index) => String(value ?? '').trim() || `Column ${index + 1}`)
-    const normalizedHeaders = headers.map(normalizeHeader)
-    const recognizedCount = normalizedHeaders.filter((header) =>
-      recognizedAliases.some((alias) => header === alias || header.startsWith(alias)),
-    ).length
+    const recognizedCount = headers.filter(isKnownHeader).length
     if (recognizedCount < 2) continue
 
     const rows = grid.slice(headerIndex + 1).map((values) =>
       Object.fromEntries(headers.map((header, index) => [header, values?.[index] ?? ''])),
     )
-    const candidate = mapCargoRows(rows)
-    if (candidate.items.length > best.items.length) best = candidate
+    const candidate = mapCargoRows(rows, headerIndex + 1)
+    if (candidate.items.length > best.items.length || (best.headers.length === 0 && candidate.headers.length > 0)) best = candidate
   }
 
   return best
+}
+
+export function mapCargoSheets(sheets: Array<{ name: string; grid: unknown[][] }>): CargoImportResult {
+  const items: CargoSpec[] = []
+  const warnings: string[] = []
+  const headers = new Set<string>()
+  const sheetNames: string[] = []
+
+  sheets.forEach((sheet, sheetIndex) => {
+    const result = mapCargoGrid(sheet.grid)
+    result.headers.forEach((header) => headers.add(header))
+    warnings.push(...result.warnings.map((warning) => `Sheet “${sheet.name}” - ${warning}`))
+    if (result.items.length === 0) return
+
+    sheetNames.push(sheet.name)
+    items.push(...result.items.map((item, rowIndex) => ({
+      ...item,
+      id: `import-${sheetIndex + 1}-${rowIndex + 1}`,
+    })))
+  })
+
+  return { items, warnings, headers: [...headers].slice(0, 50), sheetNames }
 }

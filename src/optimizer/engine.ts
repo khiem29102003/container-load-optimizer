@@ -79,6 +79,7 @@ export function normalizeCargo(raw: Partial<CargoSpec>): CargoSpec {
     clearance: Number(raw.clearance ?? 0),
     temperatureGroup: raw.temperatureGroup ?? 'normal',
     notes: raw.notes ?? '',
+    extraFields: raw.extraFields && typeof raw.extraFields === 'object' ? { ...raw.extraFields } : {},
   }
 }
 

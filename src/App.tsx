@@ -1,7 +1,7 @@
 import { lazy, Suspense, type ChangeEvent, useEffect, useRef, useState } from 'react'
 import { defaultContainer } from './data/defaults'
 import { createTemplateCsv, estimateAdditionalQuantity, explainPlacementIssue, normalizeCargo } from './optimizer/engine'
-import { mapCargoGrid } from './lib/importCargo'
+import { mapCargoSheets } from './lib/importCargo'
 import { supabase } from './lib/supabase'
 import type { CargoSpec, ContainerSpec, LoadingProject, OptimizationResult, Placement } from './types'
 import './App.css'
@@ -80,6 +80,7 @@ function App({ userId }: { userId: string }) {
   const [optimizationStatus, setOptimizationStatus] = useState<'idle' | 'running' | 'complete' | 'error'>('idle')
   const [selectedPlacement, setSelectedPlacement] = useState<Placement | null>(null)
   const [view, setView] = useState<'front' | 'top'>('front')
+  const [viewedContainerIndex, setViewedContainerIndex] = useState(1)
   const [loadedPage, setLoadedPage] = useState(1)
   const [loadedPageSize, setLoadedPageSize] = useState(25)
   const [activeSection, setActiveSection] = useState('#dashboard')
@@ -198,6 +199,7 @@ function App({ userId }: { userId: string }) {
       }
       const result = event.data.result
       setPlan(result)
+      setViewedContainerIndex(1)
       setOptimizationStatus('complete')
       setLoadedPage(1)
       setLogs(result.logs)
@@ -265,6 +267,7 @@ function App({ userId }: { userId: string }) {
     }
     return summary
   }, [])
+  const cargoExtraColumns = [...new Set(cargo.flatMap((item) => Object.keys(item.extraFields ?? {})))]
   const containerIndexes = plan?.containers.map((containerPlan) => containerPlan.index) ?? []
   const loadedByContainerAndSku = new Map<string, Map<number, number>>()
   for (const placement of plan?.loaded ?? []) {
@@ -312,6 +315,7 @@ function App({ userId }: { userId: string }) {
     setContainer(selected.container)
     setCargo(selected.cargo)
     setPlan(selected.plan)
+    setViewedContainerIndex(1)
     setLoadedPage(1)
     setSelectedPlacement(selected.plan?.loaded[0] ?? null)
     setProjectStatus('')
@@ -348,6 +352,7 @@ function App({ userId }: { userId: string }) {
     setContainer(created.container)
     setCargo(created.cargo)
     setPlan(created.plan)
+    setViewedContainerIndex(1)
     setLoadedPage(1)
     setSelectedPlacement(null)
     setProjectStatus('')
@@ -517,27 +522,26 @@ function App({ userId }: { userId: string }) {
       const XLSX = await import('xlsx')
       const arrayBuffer = await file.arrayBuffer()
       const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-      let bestSheet = ''
-      let bestImport = { items: [] as CargoSpec[], warnings: [] as string[], headers: [] as string[] }
-      for (const sheetName of workbook.SheetNames) {
-        const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: '' })
-        const candidate = mapCargoGrid(rows)
-        if (candidate.items.length > bestImport.items.length || (bestImport.headers.length === 0 && candidate.headers.length > 0)) {
-          bestSheet = sheetName
-          bestImport = candidate
-        }
-      }
+      const bestImport = mapCargoSheets(workbook.SheetNames.map((sheetName) => ({
+        name: sheetName,
+        grid: XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: '' }),
+      })))
 
       if (bestImport.items.length > 0) {
+        const extraColumnCount = new Set(bestImport.items.flatMap((item) => Object.keys(item.extraFields ?? {}))).size
+        const extraColumnNotice = extraColumnCount > 0
+          ? ` Đã giữ ${extraColumnCount} cột bổ sung làm thông tin tham chiếu; các cột này chưa được dùng làm ràng buộc chất xếp.`
+          : ''
         setSaveStatus('saving')
         setPlan(null)
         setCargo(bestImport.items)
         setImportStatus(bestImport.warnings.length > 0
-          ? `Đã nhập ${bestImport.items.length} dòng từ sheet “${bestSheet}”; bỏ qua ${bestImport.warnings.length} dòng. ${bestImport.warnings.slice(0, 2).join(' ')}`
-          : `Đã nhập ${bestImport.items.length} dòng từ sheet “${bestSheet}”.`)
+          ? `Đã nhập ${bestImport.items.length} dòng từ ${bestImport.sheetNames?.length ?? 0} sheet (${bestImport.sheetNames?.join(', ')}); bỏ qua ${bestImport.warnings.length} dòng. ${bestImport.warnings.slice(0, 2).join(' ')}${extraColumnNotice}`
+          : `Đã nhập ${bestImport.items.length} dòng từ ${bestImport.sheetNames?.length ?? 0} sheet (${bestImport.sheetNames?.join(', ')}).${extraColumnNotice}`)
       } else {
         const detectedHeaders = bestImport.headers.length > 0 ? bestImport.headers.join(', ') : 'không nhận diện được tiêu đề cột'
-        setImportStatus(`Không tìm thấy dòng hàng hóa hợp lệ. Cột đọc được: ${detectedHeaders}. Cần có Dài, Rộng, Cao hoặc Quy cách dạng D×R×C.`)
+        const rowWarnings = bestImport.warnings.slice(0, 3).join(' ')
+        setImportStatus(`Không tìm thấy dòng hàng hóa hợp lệ. Cột đọc được: ${detectedHeaders}. Cần có Dài, Rộng, Cao hoặc Quy cách dạng D×R×C. ${rowWarnings}`)
       }
     } catch (error) {
       setImportStatus(`Không đọc được file: ${error instanceof Error ? error.message : 'Định dạng không hợp lệ.'}`)
@@ -561,10 +565,20 @@ function App({ userId }: { userId: string }) {
   }
 
   const exportCsv = () => {
-    const csv = cargo
-      .map((item) => `${item.sku},${item.name},${item.length},${item.width},${item.height},${item.weight},${item.quantity}`)
-      .join('\n')
-    downloadBlob(csv, 'loading-plan.csv', 'text/csv;charset=utf-8;')
+    const headers = [
+      'SKU', 'Name', 'Length', 'Width', 'Height', 'Weight', 'Quantity', 'Fragile', 'Stackable',
+      'MaxStackWeight', 'MaxLayers', 'NoRotate', 'ThisSideUp', 'FloorOnly', 'Priority', 'Group',
+      'UnloadSequence', 'Clearance', 'TemperatureGroup', 'Notes', ...cargoExtraColumns,
+    ]
+    const rows = cargo.map((item) => [
+      item.sku, item.name, item.length, item.width, item.height, item.weight, item.quantity, item.fragile,
+      item.stackable, item.maxStackWeight, item.maxLayers, item.noRotate, item.thisSideUp, item.floorOnly,
+      item.priority, item.group, item.unloadSequence, item.clearance, item.temperatureGroup, item.notes,
+      ...cargoExtraColumns.map((column) => item.extraFields?.[column] ?? ''),
+    ])
+    const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`
+    const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\r\n')
+    downloadBlob(`\uFEFF${csv}`, 'loading-plan.csv', 'text/csv;charset=utf-8;')
   }
 
   const exportPdf = async () => {
@@ -777,11 +791,12 @@ function App({ userId }: { userId: string }) {
                     <th>Dễ vỡ</th>
                     <th>Xếp chồng</th>
                     <th>Xóa</th>
+                    {cargoExtraColumns.map((column) => <th key={column}>{column}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {cargo.length === 0 ? (
-                    <tr><td colSpan={10} className="empty-table-cell">Chưa có hàng hóa. Thêm một dòng hoặc nhập file để bắt đầu.</td></tr>
+                    <tr><td colSpan={10 + cargoExtraColumns.length} className="empty-table-cell">Chưa có hàng hóa. Thêm một dòng hoặc nhập file để bắt đầu.</td></tr>
                   ) : cargo.map((item, index) => (
                     <tr key={`${item.id}-${index}`}>
                       <td><input value={item.sku} onChange={(event) => updateCargoRow(index, 'sku', event.target.value)} /></td>
@@ -794,6 +809,9 @@ function App({ userId }: { userId: string }) {
                       <td><input type="checkbox" checked={item.fragile} onChange={(event) => updateCargoRow(index, 'fragile', event.target.checked)} /></td>
                       <td><input type="checkbox" checked={item.stackable} onChange={(event) => updateCargoRow(index, 'stackable', event.target.checked)} /></td>
                       <td><button type="button" className="icon-button" onClick={() => removeCargoRow(index)}>x</button></td>
+                      {cargoExtraColumns.map((column) => (
+                        <td key={column}>{String(item.extraFields?.[column] ?? '')}</td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -807,6 +825,15 @@ function App({ userId }: { userId: string }) {
             <div className="panel-header split-header">
               <h3>Trực quan 3D</h3>
               <div className="inline-actions">
+                {plan && plan.totalContainers > 1 && (
+                  <label className="view-picker">Container
+                    <select value={viewedContainerIndex} onChange={(event) => setViewedContainerIndex(Number(event.target.value))}>
+                      {plan.containers.map((containerPlan) => (
+                        <option key={containerPlan.index} value={containerPlan.index}>Container {containerPlan.index}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <button type="button" className="secondary" onClick={() => setView('front')} aria-pressed={view === 'front'}>Mặt trước</button>
                 <button type="button" className="secondary" onClick={() => setView('top')} aria-pressed={view === 'top'}>Mặt trên</button>
               </div>
@@ -814,7 +841,11 @@ function App({ userId }: { userId: string }) {
             <div className="viewer">
               {plan ? (
                 <Suspense fallback={<div className="empty-state">Đang tải mô hình 3D...</div>}>
-                  <Container3D container={container} placements={plan.loaded.filter((item) => item.containerIndex === 1)} view={view} />
+                  <Container3D
+                    container={container}
+                    placements={plan.containers.find((containerPlan) => containerPlan.index === viewedContainerIndex)?.placements ?? []}
+                    view={view}
+                  />
                 </Suspense>
               ) : (
                 <div className="empty-state">Thêm hàng hóa rồi chọn “Tối ưu” để xem cách xếp trong container.</div>

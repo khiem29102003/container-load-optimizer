@@ -44,6 +44,7 @@ export interface CargoSpec {
   clearance: number
   temperatureGroup: string
   notes: string
+  extraFields?: Record<string, unknown>
 }
 
 export interface Placement {
